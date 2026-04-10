@@ -43,73 +43,81 @@ def run_query(sql):
 
 st.session_state.run_query = run_query
 
+
 @st.cache_data(ttl=600)
-def load_regions():
-    return run_query("""
+def resolve_current_user():
+    df = run_query("""
+        SELECT e.PREFERRED_FULL_NAME
+        FROM MDM.MDM_INTERFACES.DIM_EMPLOYEE e
+        WHERE UPPER(e.SNOWHOUSE_LOGIN_NAME) = CURRENT_USER()
+          AND e.IS_ACTIVE = TRUE
+        LIMIT 1
+    """)
+    if df.empty:
+        return None
+    return df.iloc[0, 0]
+
+
+@st.cache_data(ttl=600)
+def load_my_regions(full_name):
+    safe = full_name.replace("'", "''")
+    return run_query(f"""
         SELECT DISTINCT REGION_NAME
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE REGION_NAME IS NOT NULL
+        WHERE ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
           AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND REGION_NAME IS NOT NULL
         ORDER BY 1
     """)
 
-@st.cache_data(ttl=600)
-def load_team_members():
-    return run_query("""
-        SELECT DISTINCT f.VALUE::STRING as TEAM_MEMBER_NAME
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE,
-             LATERAL FLATTEN(INPUT => USE_CASE_TEAM_NAME_LIST) f
-        WHERE USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
-          AND f.VALUE::STRING IS NOT NULL
-        ORDER BY 1
-    """)
 
 with st.sidebar:
     st.title(":material/hub: Use Case Hub")
     st.caption("AFE / PSS Customer Intelligence")
     st.divider()
 
-    filter_mode = st.radio("Filter by", ["My Name", "Region / Territory"], key="filter_mode", horizontal=True)
+    my_name = resolve_current_user()
+    if not my_name:
+        st.error("Could not resolve your identity. Ensure your Snowhouse login is mapped in DIM_EMPLOYEE.", icon=":material/error:")
+        st.stop()
 
-    if filter_mode == "My Name":
+    st.markdown(f":material/person: Logged in as **{my_name}**")
+
+    filter_mode = st.radio("Filter by", ["My Use Cases", "My Region / Territory"], key="filter_mode", horizontal=True)
+
+    safe_name = my_name.replace("'", "''")
+
+    if filter_mode == "My Use Cases":
+        st.session_state.filter_sql = f"""
+            ARRAY_CONTAINS('{safe_name}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
+        """
+        st.success(f"Showing your use cases", icon=":material/person:")
+    else:
         try:
-            members_df = load_team_members()
-            all_names = members_df["TEAM_MEMBER_NAME"].dropna().tolist()
+            regions_df = load_my_regions(my_name)
+            my_regions = regions_df["REGION_NAME"].dropna().tolist()
         except Exception:
-            all_names = []
+            my_regions = []
 
-        selected_name = st.selectbox(
-            ":material/person: Your name",
-            options=[""] + all_names,
-            index=0,
-            key="selected_name",
-            placeholder="Start typing your name..."
-        )
-        st.session_state.filter_sql = None
-        if selected_name:
-            safe_name = selected_name.replace("'", "''")
+        if not my_regions:
+            st.warning("No regions found for your use cases.", icon=":material/warning:")
             st.session_state.filter_sql = f"""
                 ARRAY_CONTAINS('{safe_name}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
             """
-            st.success(f"Showing use cases for **{selected_name}**", icon=":material/person:")
-    else:
-        try:
-            regions_df = load_regions()
-            all_regions = regions_df["REGION_NAME"].dropna().tolist()
-        except Exception:
-            all_regions = []
-
-        selected_regions = st.multiselect(
-            ":material/map: Region(s)",
-            options=all_regions,
-            key="selected_regions",
-            placeholder="Select regions..."
-        )
-        st.session_state.filter_sql = None
-        if selected_regions:
-            region_list = ",".join([f"'{r}'" for r in selected_regions])
-            st.session_state.filter_sql = f"REGION_NAME IN ({region_list})"
-            st.success(f"Showing: **{', '.join(selected_regions)}**", icon=":material/map:")
+        else:
+            selected_regions = st.multiselect(
+                ":material/map: Your Region(s)",
+                options=my_regions,
+                default=my_regions,
+                key="selected_regions",
+                placeholder="Select regions..."
+            )
+            if selected_regions:
+                region_list = ",".join([f"'{r}'" for r in selected_regions])
+                st.session_state.filter_sql = f"REGION_NAME IN ({region_list})"
+                st.success(f"Showing: **{', '.join(selected_regions)}**", icon=":material/map:")
+            else:
+                st.session_state.filter_sql = None
 
     st.divider()
     try:
@@ -119,7 +127,7 @@ with st.sidebar:
         pass
 
 if not st.session_state.get("filter_sql"):
-    st.info("Select your name or a region from the sidebar to get started.", icon=":material/filter_alt:")
+    st.info("Select a filter from the sidebar to get started.", icon=":material/filter_alt:")
     st.stop()
 
 page.run()
