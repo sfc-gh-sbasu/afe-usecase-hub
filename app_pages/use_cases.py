@@ -266,8 +266,12 @@ def load_product_usage(sfdc_account_ids_csv):
     ssv2_df = pd.DataFrame()
 
     if not account_map_df.empty:
+        account_map_df = account_map_df.dropna(subset=["SNOWFLAKE_DEPLOYMENT", "SNOWFLAKE_ACCOUNT_ID"])
+        account_map_df = account_map_df[account_map_df["SNOWFLAKE_DEPLOYMENT"].astype(str).str.strip() != ""]
+
+    if not account_map_df.empty:
         conditions = " OR ".join([
-            f"(DEPLOYMENT = '{r['SNOWFLAKE_DEPLOYMENT']}' AND ACCOUNT_ID = {r['SNOWFLAKE_ACCOUNT_ID']})"
+            f"(DEPLOYMENT = '{r['SNOWFLAKE_DEPLOYMENT']}' AND ACCOUNT_ID = {safe_int(r['SNOWFLAKE_ACCOUNT_ID'])})"
             for _, r in account_map_df.iterrows()
         ])
 
@@ -481,7 +485,7 @@ for _, row in filtered.iterrows():
                     st.write(str(se_cmt)[:1500])
 
         with tab_detail:
-            sfdc_url = f"https://snowforce.lightning.force.com/lightning/r/vh__Deliverable__c/{row['USE_CASE_ID']}/view"
+            sfdc_url = f"https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{row['USE_CASE_ID']}/view"
             sfdc_account_id = row["ACCOUNT_ID"]
 
             detail_header = st.columns([2, 1, 1])
