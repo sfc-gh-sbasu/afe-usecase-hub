@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
@@ -74,7 +75,6 @@ def build_win_unblock_summary(row):
     days = row.get("DAYS_IN_STAGE")
     risk = row.get("RISK_DESCRIPTION")
     next_steps = row.get("NEXT_STEPS") or ""
-    se_comments = row.get("SE_COMMENTS") or ""
     meddpicc_pain = row.get("MEDDPICC_IDENTIFY_PAIN") or ""
     meddpicc_champion = row.get("MEDDPICC_CHAMPION") or ""
     incumbent = row.get("INCUMBENT_VENDOR") or ""
@@ -83,7 +83,6 @@ def build_win_unblock_summary(row):
     decision_date = row.get("DECISION_DATE")
     go_live = row.get("GO_LIVE_DATE")
     is_lost = bool(row.get("IS_LOST"))
-    is_won = bool(row.get("IS_WON"))
 
     if is_lost or "8 -" in stage:
         return None, "lost"
@@ -133,6 +132,84 @@ def build_win_unblock_summary(row):
     return parts, "active"
 
 
+def safe_int(v, default=0):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return default
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_float(v, default=0.0):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return default
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def strip_html(text):
+    if not text:
+        return ""
+    text = re.sub(r'<br\s*/?>', '\n', str(text))
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('&#39;', "'").replace('&amp;', '&').replace('&quot;', '"').replace('&lt;', '<').replace('&gt;', '>')
+    return text.strip()
+
+
+def generate_expansion_recs(row, product_usage_df, meetings_df):
+    recs = []
+    name = (row.get("USE_CASE_NAME") or "").lower()
+    desc = (row.get("USE_CASE_DESCRIPTION") or "").lower()
+    tech = (row.get("TECHNICAL_USE_CASE") or "").lower()
+    combined = f"{name} {desc} {tech}"
+
+    has_openflow = not product_usage_df.empty and "Openflow" in product_usage_df["PRODUCT"].values
+    has_iceberg = not product_usage_df.empty and "Iceberg" in product_usage_df["PRODUCT"].values
+    has_ssv2 = not product_usage_df.empty and "SSV2" in product_usage_df["PRODUCT"].values
+
+    call_text = ""
+    if not meetings_df.empty:
+        call_text = " ".join(meetings_df["CALL_BRIEF"].dropna().head(5).tolist()).lower()
+
+    if not has_openflow and ("ingestion" in combined or "etl" in combined or "replication" in combined or "cdc" in combined):
+        recs.append("Openflow: Customer has ingestion/ETL needs but no Openflow adoption yet. Propose Openflow to replace legacy CDC/replication tools.")
+    elif has_openflow and not has_iceberg:
+        recs.append("Iceberg Tables: Customer uses Openflow for ingestion. Propose Iceberg tables for open lakehouse storage to complement their data pipeline.")
+
+    if not has_iceberg and ("lakehouse" in combined or "databricks" in combined or "delta" in combined or "parquet" in combined):
+        recs.append("Iceberg/Lakehouse: Customer discusses lakehouse patterns. Propose Snowflake-managed Iceberg tables for interoperable open-format storage.")
+
+    if not has_ssv2 and ("streaming" in combined or "real-time" in combined or "kafka" in combined or "kinesis" in combined):
+        recs.append("Snowpipe Streaming V2: Customer has real-time/streaming requirements. Propose SSV2 for sub-second streaming ingestion.")
+
+    if "cortex" not in combined and "ml" not in combined and "machine learning" not in tech:
+        if "analytics" in combined or "reporting" in combined or "dashboard" in combined:
+            recs.append("Cortex AI: Customer focuses on analytics — propose Cortex AI functions (AI_CLASSIFY, AI_SUMMARIZE, AI_EXTRACT) to add intelligence to their data pipelines.")
+        if "search" in call_text or "natural language" in call_text:
+            recs.append("Cortex Search / Intelligence: Conversations mention search or NL queries — propose Snowflake Intelligence for text-to-SQL analytics.")
+
+    if "agent" not in combined and "conversational" not in tech:
+        if "chatbot" in call_text or "agent" in call_text or "rag" in call_text:
+            recs.append("Cortex Agents: Meeting discussions reference agents/chatbots/RAG — propose Cortex Agents for conversational AI over their data.")
+
+    if "dynamic table" not in combined and ("pipeline" in combined or "transformation" in combined):
+        recs.append("Dynamic Tables: Customer has data transformation needs — propose Dynamic Tables for declarative, auto-refreshing data pipelines.")
+
+    if "snowpark" not in combined and ("spark" in combined or "python" in combined or "pyspark" in combined):
+        recs.append("Snowpark / Snowpark Connect: Customer uses Spark/Python workloads — propose Snowpark Connect for seamless Spark-to-Snowflake migration.")
+
+    if "streamlit" not in combined and ("dashboard" in combined or "app" in combined or "visualization" in combined):
+        recs.append("Streamlit in Snowflake: Customer needs dashboards/apps — propose Streamlit in Snowflake for governed data applications.")
+
+    if not recs:
+        recs.append("Platform Growth: Explore Cortex AI, Dynamic Tables, or Snowflake Intelligence as next steps to deepen Snowflake adoption.")
+
+    return recs[:5]
+
+
 @st.cache_data(ttl=300)
 def load_use_cases(_filter):
     return run_query(f"""
@@ -157,7 +234,161 @@ def load_use_cases(_filter):
     """)
 
 
+@st.cache_data(ttl=600)
+def load_product_usage(sfdc_account_ids_csv):
+    if not sfdc_account_ids_csv:
+        return pd.DataFrame()
+
+    openflow_df = run_query(f"""
+        SELECT SALESFORCE_ACCOUNT_ID, SALESFORCE_ACCOUNT_NAME as ACCOUNT_NAME,
+               'Openflow' as PRODUCT,
+               COUNT(DISTINCT CONNECTOR_NAME) as CONNECTOR_COUNT,
+               SUM(BYTES_SENT)/1e9 as TOTAL_GB,
+               MIN(DS) as FIRST_SEEN, MAX(DS) as LAST_SEEN,
+               LISTAGG(DISTINCT CONNECTOR_NAME, ', ') WITHIN GROUP (ORDER BY CONNECTOR_NAME) as USAGE_DETAIL,
+               TRUE as IS_ACTIVE
+        FROM SNOWSCIENCE.OPENFLOW.OPENFLOW_CONNECTORS
+        WHERE SALESFORCE_ACCOUNT_ID IN ({sfdc_account_ids_csv})
+        GROUP BY 1, 2
+    """)
+
+    account_map_df = run_query(f"""
+        SELECT DISTINCT SNOWFLAKE_DEPLOYMENT, CAST(SNOWFLAKE_ACCOUNT_ID AS INTEGER) as SNOWFLAKE_ACCOUNT_ID,
+               SALESFORCE_ACCOUNT_ID
+        FROM SNOWSCIENCE.DIMENSIONS.DIM_ACCOUNTS_HISTORY
+        WHERE SALESFORCE_ACCOUNT_ID IN ({sfdc_account_ids_csv})
+          AND GENERAL_DATE = (SELECT MAX(GENERAL_DATE) FROM SNOWSCIENCE.DIMENSIONS.DIM_ACCOUNTS_HISTORY)
+          AND ACCOUNT_STATUS = 'Active'
+          AND SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+    """)
+
+    iceberg_df = pd.DataFrame()
+    ssv2_df = pd.DataFrame()
+
+    if not account_map_df.empty:
+        conditions = " OR ".join([
+            f"(DEPLOYMENT = '{r['SNOWFLAKE_DEPLOYMENT']}' AND ACCOUNT_ID = {r['SNOWFLAKE_ACCOUNT_ID']})"
+            for _, r in account_map_df.iterrows()
+        ])
+
+        iceberg_df = run_query(f"""
+            WITH latest_day AS (
+                SELECT DEPLOYMENT, ACCOUNT_ID, MAX(DS) as MAX_DS
+                FROM SNOWSCIENCE.PRODUCT.ICEBERG_DAILY_ACCOUNT_AGG
+                WHERE DS >= DATEADD(day, -90, CURRENT_DATE()) AND ({conditions})
+                GROUP BY 1, 2
+            ),
+            snapshot AS (
+                SELECT a.DEPLOYMENT, a.ACCOUNT_ID,
+                       SUM(a.TABLE_COUNT) as TOTAL_TABLES,
+                       SUM(a.QUALIFIED_TABLE_COUNT) as QUALIFIED_TABLES,
+                       SUM(a.ACTIVE_BYTES)/1e9 as GB_ACTIVE
+                FROM SNOWSCIENCE.PRODUCT.ICEBERG_DAILY_ACCOUNT_AGG a
+                JOIN latest_day ld ON a.DEPLOYMENT = ld.DEPLOYMENT AND a.ACCOUNT_ID = ld.ACCOUNT_ID AND a.DS = ld.MAX_DS
+                GROUP BY 1, 2
+            ),
+            credits_agg AS (
+                SELECT DEPLOYMENT, ACCOUNT_ID,
+                       SUM(JOB_TOTAL_CREDITS) as TOTAL_CREDITS,
+                       MIN(DS) as FIRST_SEEN, MAX(DS) as LAST_SEEN
+                FROM SNOWSCIENCE.PRODUCT.ICEBERG_DAILY_ACCOUNT_AGG
+                WHERE DS >= DATEADD(day, -90, CURRENT_DATE()) AND ({conditions})
+                GROUP BY 1, 2
+            )
+            SELECT s.DEPLOYMENT, s.ACCOUNT_ID, 'Iceberg' as PRODUCT,
+                   s.QUALIFIED_TABLES as TABLE_COUNT, s.TOTAL_TABLES as TOTAL_REGISTERED,
+                   s.GB_ACTIVE as TOTAL_GB, c.TOTAL_CREDITS,
+                   c.FIRST_SEEN, c.LAST_SEEN
+            FROM snapshot s
+            JOIN credits_agg c ON s.DEPLOYMENT = c.DEPLOYMENT AND s.ACCOUNT_ID = c.ACCOUNT_ID
+        """)
+
+        if not iceberg_df.empty:
+            sfdc_map = {(r['SNOWFLAKE_DEPLOYMENT'], r['SNOWFLAKE_ACCOUNT_ID']): r['SALESFORCE_ACCOUNT_ID']
+                        for _, r in account_map_df.iterrows()}
+            iceberg_df["SALESFORCE_ACCOUNT_ID"] = iceberg_df.apply(
+                lambda r: sfdc_map.get((r["DEPLOYMENT"], r["ACCOUNT_ID"])), axis=1)
+
+        ssv2_df = run_query(f"""
+            SELECT DEPLOYMENT, ACCOUNT_ID, 'SSV2' as PRODUCT,
+                   COUNT(DISTINCT CHANNEL_NAME) as CHANNEL_COUNT,
+                   SUM(APPEND_BYTES_COUNT)/1e9 as TOTAL_GB,
+                   MIN(DS) as FIRST_SEEN, MAX(DS) as LAST_SEEN
+            FROM SNOWSCIENCE.SNOWPIPE.SSV2_CHANNEL_METRICS
+            WHERE DS >= DATEADD(day, -90, CURRENT_DATE()) AND ({conditions})
+            GROUP BY 1, 2
+        """)
+
+        if not ssv2_df.empty:
+            sfdc_map = {(r['SNOWFLAKE_DEPLOYMENT'], r['SNOWFLAKE_ACCOUNT_ID']): r['SALESFORCE_ACCOUNT_ID']
+                        for _, r in account_map_df.iterrows()}
+            ssv2_df["SALESFORCE_ACCOUNT_ID"] = ssv2_df.apply(
+                lambda r: sfdc_map.get((r["DEPLOYMENT"], r["ACCOUNT_ID"])), axis=1)
+
+    results = []
+    if not openflow_df.empty:
+        for _, r in openflow_df.iterrows():
+            results.append({
+                "SALESFORCE_ACCOUNT_ID": r["SALESFORCE_ACCOUNT_ID"], "PRODUCT": "Openflow",
+                "USAGE_DETAIL": str(r["USAGE_DETAIL"] or "")[:500], "CONNECTOR_COUNT": safe_int(r["CONNECTOR_COUNT"]),
+                "TABLE_COUNT": 0, "CHANNEL_COUNT": 0,
+                "TOTAL_GB": safe_float(r["TOTAL_GB"]), "TOTAL_CREDITS": 0,
+                "FIRST_SEEN": r["FIRST_SEEN"], "LAST_SEEN": r["LAST_SEEN"], "IS_ACTIVE": bool(r["IS_ACTIVE"])
+            })
+    if not iceberg_df.empty:
+        for _, r in iceberg_df.iterrows():
+            qualified = safe_int(r.get("TABLE_COUNT"))
+            total_reg = safe_int(r.get("TOTAL_REGISTERED"))
+            results.append({
+                "SALESFORCE_ACCOUNT_ID": r.get("SALESFORCE_ACCOUNT_ID"), "PRODUCT": "Iceberg",
+                "USAGE_DETAIL": f"{qualified:,} active of {total_reg:,} registered tables",
+                "CONNECTOR_COUNT": 0, "TABLE_COUNT": qualified or total_reg, "CHANNEL_COUNT": 0,
+                "TOTAL_GB": safe_float(r.get("TOTAL_GB")), "TOTAL_CREDITS": safe_float(r.get("TOTAL_CREDITS")),
+                "FIRST_SEEN": r.get("FIRST_SEEN"), "LAST_SEEN": r.get("LAST_SEEN"), "IS_ACTIVE": True
+            })
+    if not ssv2_df.empty:
+        for _, r in ssv2_df.iterrows():
+            results.append({
+                "SALESFORCE_ACCOUNT_ID": r.get("SALESFORCE_ACCOUNT_ID"), "PRODUCT": "SSV2",
+                "USAGE_DETAIL": f"{safe_int(r['CHANNEL_COUNT'])} streaming channels",
+                "CONNECTOR_COUNT": 0, "TABLE_COUNT": 0, "CHANNEL_COUNT": safe_int(r["CHANNEL_COUNT"]),
+                "TOTAL_GB": safe_float(r["TOTAL_GB"]), "TOTAL_CREDITS": 0,
+                "FIRST_SEEN": r["FIRST_SEEN"], "LAST_SEEN": r["LAST_SEEN"], "IS_ACTIVE": True
+            })
+
+    return pd.DataFrame(results) if results else pd.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def load_gong_meetings(sfdc_account_ids_csv):
+    if not sfdc_account_ids_csv:
+        return pd.DataFrame()
+    return run_query(f"""
+        SELECT GONG_PRIMARY_ACCOUNT_C as SALESFORCE_ACCOUNT_ID,
+               GONG_TITLE_C as MEETING_TITLE,
+               GONG_CALL_START_C as MEETING_DATE,
+               GONG_CALL_DURATION_C as DURATION_DISPLAY,
+               GONG_PARTICIPANTS_EMAILS_C as PARTICIPANTS_EMAILS,
+               GONG_CALL_BRIEF_C as CALL_BRIEF,
+               GONG_CALL_KEY_POINTS_C as KEY_POINTS,
+               GONG_CALL_HIGHLIGHTS_NEXT_STEPS_C as NEXT_STEPS_GONG,
+               GONG_VIEW_CALL_C as VIEW_CALL_HTML,
+               GONG_CALL_ID_C as CALL_ID
+        FROM FIVETRAN.SALESFORCE.GONG_GONG_CALL_C
+        WHERE GONG_PRIMARY_ACCOUNT_C IN ({sfdc_account_ids_csv})
+          AND IS_DELETED = FALSE
+          AND GONG_CALL_START_C >= DATEADD(month, -3, CURRENT_DATE())
+        ORDER BY GONG_PRIMARY_ACCOUNT_C, GONG_CALL_START_C DESC
+    """)
+
+
 df = load_use_cases(filter_sql)
+
+sfdc_ids = df["ACCOUNT_ID"].dropna().unique().tolist()
+sfdc_ids_csv = ",".join([f"'{aid}'" for aid in sfdc_ids]) if sfdc_ids else ""
+
+usage_df = load_product_usage(sfdc_ids_csv)
+meetings_all_df = load_gong_meetings(sfdc_ids_csv)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Use Cases", len(df))
@@ -221,8 +452,8 @@ for _, row in filtered.iterrows():
             snap_cols = st.columns(3)
             with snap_cols[0]:
                 days = row["DAYS_IN_STAGE"]
-                if days is not None:
-                    st.markdown(f":material/timer: **Days in Stage:** {int(days)}")
+                if days is not None and pd.notna(days):
+                    st.markdown(f":material/timer: **Days in Stage:** {safe_int(days)}")
                 if row["OWNER_NAME"]:
                     st.caption(f":material/sell: AE: {row['OWNER_NAME']}")
                 if row["USE_CASE_LEAD_SE_NAME"]:
@@ -251,14 +482,17 @@ for _, row in filtered.iterrows():
 
         with tab_detail:
             sfdc_url = f"https://snowforce.lightning.force.com/lightning/r/vh__Deliverable__c/{row['USE_CASE_ID']}/view"
+            sfdc_account_id = row["ACCOUNT_ID"]
+
             detail_header = st.columns([2, 1, 1])
             with detail_header[0]:
-                if row["USE_CASE_DESCRIPTION"]:
-                    with st.expander(":material/description: **Use Case Description**", expanded=True):
-                        st.write(str(row["USE_CASE_DESCRIPTION"])[:3000])
+                if row["ACCOUNT_INDUSTRY"]:
+                    st.caption(f":material/domain: **Industry:** {row['ACCOUNT_INDUSTRY']} | **Stage:** {row['USE_CASE_STAGE'] or 'N/A'}")
+                if row["OWNER_NAME"] or row["USE_CASE_LEAD_SE_NAME"]:
+                    st.caption(f":material/person: **AE:** {row['OWNER_NAME'] or 'N/A'} | **Lead SE:** {row['USE_CASE_LEAD_SE_NAME'] or 'N/A'}")
             with detail_header[1]:
                 cloud = row["CLOUD_PROVIDER"] or "Unknown"
-                st.caption(f":material/cloud: **Cloud:** {cloud}")
+                st.caption(f":material/cloud: **Deploy:** {cloud}")
             with detail_header[2]:
                 st.link_button("Open in SFDC", sfdc_url, icon=":material/open_in_new:")
 
@@ -266,36 +500,148 @@ for _, row in filtered.iterrows():
                 st.error(f"**Risk:** {str(row['RISK_DESCRIPTION'])[:500]}", icon=":material/error:")
 
             sec1, sec2 = st.columns(2)
+
             with sec1:
-                st.markdown("##### :material/edit_note: Comments")
-                if row["SE_COMMENTS"]:
-                    with st.expander(":material/person: **SE Comments**", expanded=True):
-                        st.write(str(row["SE_COMMENTS"])[:3000])
-                if row["SPECIALIST_COMMENTS"]:
-                    with st.expander(":material/engineering: **Specialist Comments**"):
-                        st.write(str(row["SPECIALIST_COMMENTS"])[:3000])
-                if row["PARTNER_COMMENTS"]:
-                    with st.expander(":material/handshake: **Partner Comments**"):
-                        st.write(str(row["PARTNER_COMMENTS"])[:3000])
+                st.markdown("##### :material/analytics: Product Usage State")
+                cust_usage = pd.DataFrame()
+                if not usage_df.empty and sfdc_account_id:
+                    cust_usage = usage_df[usage_df["SALESFORCE_ACCOUNT_ID"] == sfdc_account_id]
+
+                if not cust_usage.empty:
+                    for _, u in cust_usage.iterrows():
+                        product = u["PRODUCT"]
+                        if product == "Openflow":
+                            active_label = "Active" if u["IS_ACTIVE"] else "Inactive"
+                            st.markdown(f":material/sync_alt: **Openflow** ({active_label})")
+                            st.caption(f"{u['USAGE_DETAIL']}")
+                            mc = st.columns(3)
+                            mc[0].metric("Connectors", safe_int(u["CONNECTOR_COUNT"]))
+                            mc[1].metric("Data Out (GB)", f"{safe_float(u['TOTAL_GB']):.1f}")
+                            mc[2].metric("Last Seen", str(u["LAST_SEEN"])[:10] if u["LAST_SEEN"] else "N/A")
+                        elif product == "Iceberg":
+                            st.markdown(f":material/ac_unit: **Iceberg Tables**")
+                            st.caption(u["USAGE_DETAIL"])
+                            mc = st.columns(3)
+                            mc[0].metric("Tables", f"{safe_int(u['TABLE_COUNT']):,}")
+                            gb = safe_float(u["TOTAL_GB"])
+                            mc[1].metric("Storage", f"{gb/1000:.1f} TB" if gb > 1000 else f"{gb:.1f} GB")
+                            mc[2].metric("Credits (90d)", f"{safe_float(u['TOTAL_CREDITS']):,.0f}")
+                        elif product == "SSV2":
+                            st.markdown(f":material/stream: **Snowpipe Streaming V2**")
+                            st.caption(u["USAGE_DETAIL"])
+                            mc = st.columns(2)
+                            mc[0].metric("Channels", safe_int(u["CHANNEL_COUNT"]))
+                            mc[1].metric("Ingested (GB)", f"{safe_float(u['TOTAL_GB']):.2f}")
+                else:
+                    st.info("No Openflow, Iceberg, or SSV2 telemetry detected for this account", icon=":material/info:")
+
             with sec2:
-                st.markdown("##### :material/psychology: MEDDPICC")
-                if row["MEDDPICC_IDENTIFY_PAIN"]:
-                    st.markdown(f"**Pain:** {str(row['MEDDPICC_IDENTIFY_PAIN'])[:500]}")
-                if row["MEDDPICC_CHAMPION"]:
-                    st.markdown(f"**Champion:** {str(row['MEDDPICC_CHAMPION'])[:500]}")
-                if row["MEDDPICC_METRICS"]:
-                    st.markdown(f"**Metrics:** {str(row['MEDDPICC_METRICS'])[:500]}")
-                if not any([row["MEDDPICC_IDENTIFY_PAIN"], row["MEDDPICC_CHAMPION"], row["MEDDPICC_METRICS"]]):
+                st.markdown("##### :material/edit_note: Comments")
+                has_comments = bool(row["SE_COMMENTS"]) or bool(row["SPECIALIST_COMMENTS"]) or bool(row["PARTNER_COMMENTS"])
+                if has_comments:
+                    if row["SE_COMMENTS"]:
+                        with st.expander(":material/person: **SE Comments**", expanded=True):
+                            st.write(str(row["SE_COMMENTS"])[:3000])
+                    if row["SPECIALIST_COMMENTS"]:
+                        with st.expander(":material/engineering: **Specialist Comments**"):
+                            st.write(str(row["SPECIALIST_COMMENTS"])[:3000])
+                    if row["PARTNER_COMMENTS"]:
+                        with st.expander(":material/handshake: **Partner Comments**"):
+                            st.write(str(row["PARTNER_COMMENTS"])[:3000])
+                else:
+                    st.info("No SE, specialist, or partner comments recorded in SFDC", icon=":material/info:")
+
+                if row["MEDDPICC_IDENTIFY_PAIN"] or row["MEDDPICC_CHAMPION"] or row["MEDDPICC_METRICS"]:
+                    with st.expander(":material/psychology: **MEDDPICC**"):
+                        if row["MEDDPICC_IDENTIFY_PAIN"]:
+                            st.markdown(f"**Pain:** {str(row['MEDDPICC_IDENTIFY_PAIN'])[:500]}")
+                        if row["MEDDPICC_CHAMPION"]:
+                            st.markdown(f"**Champion:** {str(row['MEDDPICC_CHAMPION'])[:500]}")
+                        if row["MEDDPICC_METRICS"]:
+                            st.markdown(f"**Metrics:** {str(row['MEDDPICC_METRICS'])[:500]}")
+                else:
                     st.info("No MEDDPICC data recorded", icon=":material/info:")
 
-            tech_parts = []
-            if row["INCUMBENT_VENDOR"]:
-                tech_parts.append(f"Incumbent: {row['INCUMBENT_VENDOR']}")
-            if row["COMPETITORS"]:
-                tech_parts.append(f"Competing: {row['COMPETITORS']}")
-            if row["IMPLEMENTER"]:
-                tech_parts.append(f"Implementer: {row['IMPLEMENTER']}")
-            if row["PARTNER_NAME"]:
-                tech_parts.append(f"Partner: {row['PARTNER_NAME']}")
-            if tech_parts:
-                st.caption(f":material/build: {' | '.join(tech_parts)}")
+            st.divider()
+
+            st.markdown("##### :material/record_voice_over: Recent Meetings (Gong)")
+            cust_meetings = pd.DataFrame()
+            if not meetings_all_df.empty and sfdc_account_id:
+                cust_meetings = meetings_all_df[meetings_all_df["SALESFORCE_ACCOUNT_ID"] == sfdc_account_id]
+
+            if not cust_meetings.empty:
+                for idx, (_, mtg) in enumerate(cust_meetings.head(3).iterrows()):
+                    meeting_date = str(mtg["MEETING_DATE"])[:16] if mtg["MEETING_DATE"] else "N/A"
+                    duration = mtg["DURATION_DISPLAY"] or "N/A"
+                    with st.expander(
+                        f":material/videocam: **{mtg['MEETING_TITLE']}** — {meeting_date} ({duration})",
+                        expanded=(idx == 0)
+                    ):
+                        if mtg["PARTICIPANTS_EMAILS"]:
+                            st.caption(f":material/group: {str(mtg['PARTICIPANTS_EMAILS'])[:200]}")
+                        brief = strip_html(mtg.get("CALL_BRIEF"))
+                        if brief:
+                            st.markdown("**Summary:**")
+                            st.write(brief[:2000])
+                        key_pts = strip_html(mtg.get("KEY_POINTS"))
+                        if key_pts:
+                            st.markdown("**Key Points:**")
+                            st.write(key_pts[:2000])
+                        ns = strip_html(mtg.get("NEXT_STEPS_GONG"))
+                        if ns:
+                            st.markdown("**Next Steps:**")
+                            st.write(ns[:2000])
+                        gong_url = None
+                        view_html = str(mtg.get("VIEW_CALL_HTML") or "")
+                        url_match = re.search(r'href="([^"]+)"', view_html)
+                        if url_match:
+                            gong_url = url_match.group(1)
+                        elif mtg.get("CALL_ID"):
+                            gong_url = f"https://app.gong.io/call?id={mtg['CALL_ID']}"
+                        if gong_url:
+                            st.link_button("Open in Gong", gong_url, icon=":material/play_circle:")
+            else:
+                st.info("No Gong recordings found for this account in the last 3 months", icon=":material/info:")
+
+            st.divider()
+
+            mtg_col, rec_col = st.columns(2)
+            with mtg_col:
+                if row["USE_CASE_DESCRIPTION"]:
+                    with st.expander(":material/description: **Use Case Description**", expanded=True):
+                        st.write(str(row["USE_CASE_DESCRIPTION"])[:3000])
+
+                tech_parts = []
+                if row["INCUMBENT_VENDOR"]:
+                    tech_parts.append(f"Incumbent: {row['INCUMBENT_VENDOR']}")
+                if row["COMPETITORS"]:
+                    tech_parts.append(f"Competing: {row['COMPETITORS']}")
+                if row["IMPLEMENTER"]:
+                    tech_parts.append(f"Implementer: {row['IMPLEMENTER']}")
+                if row["PARTNER_NAME"]:
+                    tech_parts.append(f"Partner: {row['PARTNER_NAME']}")
+                if tech_parts:
+                    st.caption(f":material/build: {' | '.join(tech_parts)}")
+
+            with rec_col:
+                st.markdown("##### :material/lightbulb: Expansion Recommendations")
+                recs = generate_expansion_recs(row, cust_usage, cust_meetings)
+                for rec_line in recs:
+                    rec_line = rec_line.strip()
+                    if rec_line:
+                        if rec_line.startswith("Openflow:"):
+                            st.markdown(f":material/sync_alt: {rec_line}")
+                        elif rec_line.startswith("Iceberg"):
+                            st.markdown(f":material/ac_unit: {rec_line}")
+                        elif rec_line.startswith("Snowpipe") or rec_line.startswith("SSV2"):
+                            st.markdown(f":material/stream: {rec_line}")
+                        elif rec_line.startswith("Cortex"):
+                            st.markdown(f":material/psychology: {rec_line}")
+                        elif rec_line.startswith("Dynamic"):
+                            st.markdown(f":material/autorenew: {rec_line}")
+                        elif rec_line.startswith("Snowpark"):
+                            st.markdown(f":material/code: {rec_line}")
+                        elif rec_line.startswith("Streamlit"):
+                            st.markdown(f":material/dashboard: {rec_line}")
+                        else:
+                            st.markdown(f":material/trending_up: {rec_line}")
