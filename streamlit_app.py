@@ -109,7 +109,7 @@ def load_my_regions(full_name):
 
 with st.sidebar:
     st.title(":material/hub: DE Field Use Case Intelligence Hub")
-    st.caption("Real-time visibility into AFE/PSS use cases, contacts, tech stack, and product opportunities")
+    st.caption("Real-time visibility into AFE/PSS use cases, contacts, tech stack, product usage metrics, and opportunities")
     st.divider()
 
     my_name = resolve_current_user()
