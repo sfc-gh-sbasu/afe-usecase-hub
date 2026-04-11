@@ -92,7 +92,7 @@ def build_pdf():
     story.append(HRFlowable(width="60%", thickness=2, color=SNOWFLAKE_BLUE, spaceAfter=12))
     story.append(Paragraph("User Guide, Architecture, and Deployment Reference", subtitle_style))
     story.append(Spacer(1, 0.5 * inch))
-    story.append(Paragraph("Author: Subhajit Basu (Sumit Basu)", ParagraphStyle(
+    story.append(Paragraph("Author: Subhajit Basu", ParagraphStyle(
         "Author", parent=body_style, fontSize=11, alignment=TA_CENTER, textColor=SNOWFLAKE_DARK)))
     story.append(Paragraph("Applied Field Engineering - Data Engineering", ParagraphStyle(
         "Team", parent=body_style, fontSize=10, alignment=TA_CENTER, textColor=MEDIUM_GRAY)))
@@ -109,7 +109,7 @@ def build_pdf():
         "2. Key Features and Pages",
         "3. How to Use It",
         "4. Data Sources and Architecture",
-        "5. The Five Core AFE/PSS Services",
+        "5. The Five Core DE AFE/PSS Services",
         "6. Opportunity Detection Methodology",
         "7. Access Control and Identity",
         "8. GitHub Repository",
@@ -290,7 +290,7 @@ def build_pdf():
     story.append(PageBreak())
 
     # ---- SECTION 5: FIVE CORE SERVICES ----
-    story.append(Paragraph("5. The Five Core AFE/PSS Services", h1_style))
+    story.append(Paragraph("5. The Five Core DE AFE/PSS Services", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
     story.append(Paragraph(
         "The dashboard is organized around five core services that the AFE/PSS team focuses on:", body_style))
@@ -523,7 +523,7 @@ def build_pdf():
     story.append(Spacer(1, 24))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=8))
     story.append(Paragraph(
-        "For questions or contributions, contact Subhajit Basu (sbasu@snowflake.com) "
+        "For questions or contributions, contact Subhajit Basu (subhajit.basu@snowflake.com) "
         "or open an issue on the GitHub repository.", caption_style))
 
     doc.build(story)

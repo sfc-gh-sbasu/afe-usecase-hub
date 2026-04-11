@@ -30,7 +30,15 @@ def load_flattened_team(_filter):
             d.USE_CASE_ID,
             d.ACCOUNT_NAME,
             n.VALUE::STRING AS CONTACT_NAME,
-            COALESCE(d.USE_CASE_TEAM_ROLE_LIST[n.INDEX]::STRING, 'Team Member') AS CONTACT_ROLE
+            CASE
+                WHEN n.VALUE::STRING = d.OWNER_NAME THEN 'Use Case Owner'
+                WHEN n.VALUE::STRING = d.USE_CASE_LEAD_SE_NAME THEN 'Solution Engineer'
+                WHEN ARRAY_CONTAINS(n.VALUE, d.USE_CASE_TEAM_ACCOUNT_SE_WORKLOAD_FCTO_LIST) THEN 'SE - Workload FCTO'
+                WHEN ARRAY_CONTAINS(n.VALUE, d.USE_CASE_TEAM_PLATFORM_SPECIALIST_LIST) THEN 'Platform Specialist'
+                WHEN n.INDEX < ARRAY_SIZE(d.USE_CASE_TEAM_ROLE_LIST)
+                     THEN COALESCE(d.USE_CASE_TEAM_ROLE_LIST[n.INDEX]::STRING, 'Team Member')
+                ELSE 'Team Member'
+            END AS CONTACT_ROLE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE d,
              LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_NAME_LIST) n
         WHERE ({_filter})
