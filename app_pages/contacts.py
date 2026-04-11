@@ -30,14 +30,12 @@ def load_flattened_team(_filter):
             d.USE_CASE_ID,
             d.ACCOUNT_NAME,
             n.VALUE::STRING AS CONTACT_NAME,
-            r.VALUE::STRING AS CONTACT_ROLE
+            COALESCE(d.USE_CASE_TEAM_ROLE_LIST[n.INDEX]::STRING, 'Team Member') AS CONTACT_ROLE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE d,
-             LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_NAME_LIST) n,
-             LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_ROLE_LIST) r
+             LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_NAME_LIST) n
         WHERE ({_filter})
           AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
-          AND n.INDEX = r.INDEX
-        ORDER BY d.ACCOUNT_NAME, r.VALUE::STRING
+        ORDER BY d.ACCOUNT_NAME, CONTACT_ROLE
     """)
 
 try:

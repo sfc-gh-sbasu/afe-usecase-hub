@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 
-st.set_page_config(page_title="AFE/PSS Use Case Hub", layout="wide", page_icon=":material/hub:")
+st.set_page_config(page_title="DE Field Use Case Intelligence Hub", layout="wide", page_icon=":material/hub:")
 
 pages = [
     st.Page("app_pages/use_cases.py", title="Use Cases", icon=":material/work:"),
@@ -108,8 +108,8 @@ def load_my_regions(full_name):
 
 
 with st.sidebar:
-    st.title(":material/hub: Use Case Hub")
-    st.caption("AFE / PSS Customer Intelligence")
+    st.title(":material/hub: Intelligence Hub")
+    st.caption("Data Engineering Field Use Case Intelligence Hub")
     st.divider()
 
     my_name = resolve_current_user()
