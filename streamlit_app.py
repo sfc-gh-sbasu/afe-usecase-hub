@@ -59,12 +59,48 @@ def resolve_current_user():
 
 
 @st.cache_data(ttl=600)
-def load_my_regions(full_name):
+def resolve_user_role(full_name):
     safe = full_name.replace("'", "''")
+    df = run_query(f"""
+        SELECT
+            COUNT(CASE WHEN ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST) THEN 1 END) as IC_COUNT,
+            COUNT(CASE WHEN ACCOUNT_SE_MANAGER = '{safe}' THEN 1 END) as MGR_COUNT,
+            COUNT(CASE WHEN ACCOUNT_SE_DIRECTOR = '{safe}' THEN 1 END) as DIR_COUNT,
+            COUNT(CASE WHEN ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' THEN 1 END) as VP_COUNT
+        FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+        WHERE USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+    """)
+    if df.empty:
+        return "ic"
+    row = df.iloc[0]
+    if row["VP_COUNT"] > 0:
+        return "vp"
+    if row["DIR_COUNT"] > 0:
+        return "director"
+    if row["MGR_COUNT"] > 0:
+        return "manager"
+    return "ic"
+
+
+def build_name_filter(full_name):
+    safe = full_name.replace("'", "''")
+    role = resolve_user_role(full_name)
+    if role == "vp":
+        return f"(ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' OR ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
+    if role == "director":
+        return f"(ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
+    if role == "manager":
+        return f"(ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
+    return f"ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST)"
+
+
+@st.cache_data(ttl=600)
+def load_my_regions(full_name):
+    name_filter = build_name_filter(full_name)
     return run_query(f"""
         SELECT DISTINCT REGION_NAME
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
+        WHERE {name_filter}
           AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
           AND REGION_NAME IS NOT NULL
         ORDER BY 1
@@ -81,16 +117,16 @@ with st.sidebar:
         st.error("Could not resolve your identity. Ensure your Snowhouse login is mapped in DIM_EMPLOYEE.", icon=":material/error:")
         st.stop()
 
-    st.markdown(f":material/person: Logged in as **{my_name}**")
+    user_role = resolve_user_role(my_name)
+    role_labels = {"ic": "SE", "manager": "Manager", "director": "Director", "vp": "VP"}
+    st.markdown(f":material/person: Logged in as **{my_name}** ({role_labels.get(user_role, 'SE')})")
 
     filter_mode = st.radio("Filter by", ["My Use Cases", "My Region / Territory"], key="filter_mode", horizontal=True)
 
-    safe_name = my_name.replace("'", "''")
+    my_name_filter = build_name_filter(my_name)
 
     if filter_mode == "My Use Cases":
-        st.session_state.filter_sql = f"""
-            ARRAY_CONTAINS('{safe_name}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
-        """
+        st.session_state.filter_sql = my_name_filter
         st.success(f"Showing your use cases", icon=":material/person:")
     else:
         try:
@@ -101,9 +137,7 @@ with st.sidebar:
 
         if not my_regions:
             st.warning("No regions found for your use cases.", icon=":material/warning:")
-            st.session_state.filter_sql = f"""
-                ARRAY_CONTAINS('{safe_name}'::VARIANT, USE_CASE_TEAM_NAME_LIST)
-            """
+            st.session_state.filter_sql = my_name_filter
         else:
             selected_regions = st.multiselect(
                 ":material/map: Your Region(s)",
