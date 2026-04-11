@@ -87,10 +87,13 @@ def build_pdf():
 
     # ---- COVER / TITLE ----
     story.append(Spacer(1, 1.5 * inch))
-    story.append(Paragraph("Data Engineering Field<br/>Use Case Intelligence Hub", title_style))
+    story.append(Paragraph("DE Field Use Case<br/>Intelligence Hub", title_style))
     story.append(Spacer(1, 12))
     story.append(HRFlowable(width="60%", thickness=2, color=SNOWFLAKE_BLUE, spaceAfter=12))
-    story.append(Paragraph("User Guide, Architecture, and Deployment Reference", subtitle_style))
+    story.append(Paragraph("Real-time visibility into AFE/PSS use cases, contacts, tech stack, product usage metrics, and opportunities", subtitle_style))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("User Guide, Architecture, and Deployment Reference", ParagraphStyle(
+        "SubRef", parent=body_style, fontSize=11, alignment=TA_CENTER, textColor=MEDIUM_GRAY)))
     story.append(Spacer(1, 0.5 * inch))
     story.append(Paragraph("Author: Subhajit Basu", ParagraphStyle(
         "Author", parent=body_style, fontSize=11, alignment=TA_CENTER, textColor=SNOWFLAKE_DARK)))
@@ -125,7 +128,7 @@ def build_pdf():
     story.append(Paragraph("1. What is this Dashboard?", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
     story.append(Paragraph(
-        "The <b>Data Engineering Field Use Case Intelligence Hub</b> is a Streamlit-based analytics "
+        "The <b>DE Field Use Case Intelligence Hub</b> is a Streamlit-based analytics "
         "dashboard that provides real-time visibility into all active AFE (Applied Field Engineering) "
         "and PSS (Platform Specialist Solutions) use cases across the Snowflake field organization.", body_style))
     story.append(Paragraph(
