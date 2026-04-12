@@ -432,13 +432,13 @@ for _, row in filtered.iterrows():
                 st.caption(focus)
         with c2:
             if row["IS_LOST"]:
-                st.badge("Lost", icon=":material/block:", color="red")
+                st.markdown(":red[:material/block: Lost]")
             elif row["IS_WON"]:
-                st.badge("Won", icon=":material/celebration:", color="green")
+                st.markdown(":green[:material/celebration: Won]")
             elif row["IN_POC"]:
-                st.badge("POC", icon=":material/science:", color="blue")
+                st.markdown(":blue[:material/science: POC]")
             else:
-                st.badge("In Pursuit", icon=":material/trending_up:", color="orange")
+                st.markdown(":orange[:material/trending_up: In Pursuit]")
 
         render_lifecycle_bar(row["USE_CASE_STAGE"])
 

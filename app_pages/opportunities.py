@@ -1,13 +1,39 @@
 import streamlit as st
 import pandas as pd
+import json
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
 
 st.title(":material/lightbulb: Product Opportunities")
-st.caption("AI-identified product expansion opportunities based on SFDC use case metadata, technical keywords, and competitive context")
+st.caption("Cortex AI-powered product expansion opportunities — analyzes SFDC use case metadata with Snowflake Cortex LLM")
 
 FIVE_SERVICES = ["Openflow", "SSV2 (Snowpipe Streaming)", "Iceberg / Open Data Lake", "Dynamic Tables", "Snowpark"]
+
+CORTEX_MODEL = "llama3.1-70b"
+
+SYSTEM_PROMPT = """You are a Snowflake Applied Field Engineering (AFE) specialist. Your job is to analyze SFDC use case data and identify product expansion opportunities across these 5 Snowflake services:
+
+1. **Openflow** — Data ingestion, CDC, database replication, SaaS connectors. Competitors: Fivetran, Airbyte, Informatica, Matillion, NiFi, Talend, Stitch, HVR, Qlik Replicate, Oracle GoldenGate, Oracle XStream.
+2. **SSV2 (Snowpipe Streaming)** — Real-time streaming ingestion via Kafka connector, Kinesis, or custom SDK. Low-latency, event-driven pipelines. Competitors: Confluent, Amazon Kinesis, Azure Event Hubs, Google Pub/Sub.
+3. **Iceberg / Open Data Lake** — Apache Iceberg tables, open table formats, interoperable storage, lakehouse architecture. Competitors: Databricks Delta Lake, Apache Hudi, AWS Lake Formation.
+4. **Dynamic Tables** — Declarative data pipelines, continuous/incremental transformation, materialized views replacement. No direct competitor — replaces custom ETL/ELT orchestration (Airflow, dbt scheduling, stored procedures).
+5. **Snowpark** — Python/Java/Scala compute on Snowflake, UDFs, Snowpark Connect for Spark migration. Competitors: Databricks, EMR, Spark on Kubernetes, Google Dataproc.
+
+For each use case, analyze ALL text fields and return ONLY relevant product opportunities as a JSON array. Each opportunity must have:
+- "product": One of the 5 service names EXACTLY as listed above
+- "confidence": "HIGH" (strong explicit signals), "MEDIUM" (related technology patterns), or "LOW" (indirect/inferred fit)
+- "rationale": 1-2 sentence explanation of WHY this is an opportunity
+- "signals": Array of specific evidence found in the text
+
+Rules:
+- A use case can match 0 to 5 products. Only include genuine opportunities.
+- HIGH = explicit product mention OR very strong direct signal (e.g., "CDC replication from Oracle" → HIGH for Openflow)
+- MEDIUM = related technology pattern (e.g., "real-time data pipeline" → MEDIUM for SSV2)
+- LOW = indirect/inferred fit (e.g., "data warehouse modernization" → LOW for Dynamic Tables)
+- If a competing product is mentioned (e.g., Fivetran, Databricks, Kafka), flag it as a displacement opportunity
+- Consider the incumbent vendor as competitive context
+- Return ONLY a valid JSON array. No markdown, no explanation outside the JSON."""
 
 
 def safe_int(v, default=0):
@@ -38,95 +64,99 @@ def load_use_case_data(_filter):
     """)
 
 
-def detect_opportunities(df):
+@st.cache_data(ttl=600)
+def detect_opportunities_cortex(_filter):
+    result_df = run_query(f"""
+        WITH use_cases AS (
+            SELECT
+                USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_ID, ACCOUNT_INDUSTRY,
+                USE_CASE_NAME, USE_CASE_DESCRIPTION,
+                TECHNICAL_USE_CASE, WORKLOADS, CLOUD_PROVIDER,
+                COMPETITORS, INCUMBENT_VENDOR,
+                USE_CASE_STAGE, REGION_NAME,
+                OWNER_NAME, USE_CASE_LEAD_SE_NAME,
+                IS_WON, IN_POC
+            FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+            WHERE ({_filter})
+              AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+        )
+        SELECT
+            USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_ID, ACCOUNT_INDUSTRY,
+            USE_CASE_NAME, USE_CASE_STAGE, CLOUD_PROVIDER, REGION_NAME,
+            INCUMBENT_VENDOR, COMPETITORS, OWNER_NAME, USE_CASE_LEAD_SE_NAME,
+            IS_WON, IN_POC,
+            SNOWFLAKE.CORTEX.COMPLETE(
+                '{CORTEX_MODEL}',
+                CONCAT(
+                    '{SYSTEM_PROMPT.replace(chr(39), chr(39)+chr(39))}',
+                    '\\n\\nUse Case Data:\\n',
+                    '- Account: ', COALESCE(ACCOUNT_NAME, 'N/A'), '\\n',
+                    '- Industry: ', COALESCE(ACCOUNT_INDUSTRY, 'N/A'), '\\n',
+                    '- Use Case Name: ', COALESCE(USE_CASE_NAME, 'N/A'), '\\n',
+                    '- Description: ', COALESCE(USE_CASE_DESCRIPTION, 'N/A'), '\\n',
+                    '- Technical Use Case: ', COALESCE(TECHNICAL_USE_CASE, 'N/A'), '\\n',
+                    '- Workloads: ', COALESCE(WORKLOADS, 'N/A'), '\\n',
+                    '- Cloud Provider: ', COALESCE(CLOUD_PROVIDER, 'N/A'), '\\n',
+                    '- Incumbent Vendor: ', COALESCE(INCUMBENT_VENDOR, 'N/A'), '\\n',
+                    '- Competitors: ', COALESCE(COMPETITORS, 'N/A'), '\\n',
+                    '\\nReturn ONLY a JSON array of opportunities. If none, return [].'
+                )
+            ) AS LLM_RESPONSE
+        FROM use_cases
+    """)
+    return result_df
+
+
+def parse_llm_opportunities(result_df):
     opps = []
-    for _, row in df.iterrows():
-        tech = str(row.get("TECHNICAL_USE_CASE") or "").lower()
-        workloads = str(row.get("WORKLOADS") or "").lower()
-        desc = str(row.get("USE_CASE_DESCRIPTION") or "").lower()
-        combined = f"{tech} {workloads} {desc}"
-        incumbent = str(row.get("INCUMBENT_VENDOR") or "")
-        stage = str(row.get("USE_CASE_STAGE") or "")
+    for _, row in result_df.iterrows():
+        raw = str(row.get("LLM_RESPONSE") or "[]")
+        try:
+            start = raw.find("[")
+            end = raw.rfind("]") + 1
+            if start >= 0 and end > start:
+                parsed = json.loads(raw[start:end])
+            else:
+                parsed = []
+        except (json.JSONDecodeError, ValueError):
+            parsed = []
+
         base = dict(
             USE_CASE_ID=row["USE_CASE_ID"], ACCOUNT_NAME=row["ACCOUNT_NAME"],
             ACCOUNT_ID=row.get("ACCOUNT_ID"), ACCOUNT_INDUSTRY=row.get("ACCOUNT_INDUSTRY"),
-            USE_CASE_NAME=row.get("USE_CASE_NAME"), USE_CASE_STAGE=stage,
+            USE_CASE_NAME=row.get("USE_CASE_NAME"), USE_CASE_STAGE=str(row.get("USE_CASE_STAGE") or ""),
             CLOUD_PROVIDER=row.get("CLOUD_PROVIDER"), REGION_NAME=row.get("REGION_NAME"),
-            INCUMBENT_VENDOR=incumbent, COMPETITORS=row.get("COMPETITORS"),
+            INCUMBENT_VENDOR=str(row.get("INCUMBENT_VENDOR") or ""),
+            COMPETITORS=row.get("COMPETITORS"),
             OWNER_NAME=row.get("OWNER_NAME"), LEAD_SE=row.get("USE_CASE_LEAD_SE_NAME"),
             IS_WON=row.get("IS_WON"), IN_POC=row.get("IN_POC"),
         )
 
-        if any(kw in combined for kw in ["ingestion", "openflow", "cdc", "replication", "nifi", "fivetran", "airbyte", "informatica", "matillion", "xstream", "goldengate"]):
-            confidence = "HIGH" if "openflow" in combined else "MEDIUM"
-            signals = []
-            if "openflow" in combined:
-                signals.append("Openflow explicitly mentioned in SFDC")
-            if any(kw in combined for kw in ["cdc", "replication", "xstream", "goldengate"]):
-                signals.append("CDC/replication keywords detected")
-            if any(kw in combined for kw in ["fivetran", "airbyte", "informatica", "matillion", "nifi"]):
-                signals.append(f"Competing tool mentioned — displacement opportunity")
-            if incumbent and incumbent.lower() not in ["none", "nan", ""]:
-                signals.append(f"Incumbent: {incumbent}")
-            opps.append({**base, "PRODUCT": "Openflow", "CONFIDENCE": confidence,
-                         "RATIONALE": f"Data ingestion/replication use case. {'; '.join(signals)}",
-                         "SIGNALS": signals})
+        for item in parsed:
+            product = item.get("product", "")
+            if product not in FIVE_SERVICES:
+                for svc in FIVE_SERVICES:
+                    if product.lower() in svc.lower() or svc.lower().startswith(product.lower()):
+                        product = svc
+                        break
+                else:
+                    continue
 
-        if any(kw in combined for kw in ["iceberg", "interoperable storage", "data lake", "lakehouse", "parquet", "delta", "open format", "open table"]):
-            confidence = "HIGH" if "iceberg" in combined else "MEDIUM"
-            signals = []
-            if "iceberg" in combined:
-                signals.append("Iceberg explicitly mentioned")
-            if any(kw in combined for kw in ["lakehouse", "delta", "databricks"]):
-                signals.append("Lakehouse/Delta keywords — open format interest")
-            if "parquet" in combined:
-                signals.append("Parquet mentioned — open format storage need")
-            opps.append({**base, "PRODUCT": "Iceberg / Open Data Lake", "CONFIDENCE": confidence,
-                         "RATIONALE": f"Open data lake / Iceberg opportunity. {'; '.join(signals)}",
-                         "SIGNALS": signals})
+            confidence = str(item.get("confidence", "LOW")).upper()
+            if confidence not in ("HIGH", "MEDIUM", "LOW"):
+                confidence = "MEDIUM"
 
-        if any(kw in combined for kw in ["streaming", "kafka", "kinesis", "snowpipe streaming", "real-time", "ssv2", "real time", "low latency"]):
-            confidence = "HIGH" if any(kw in combined for kw in ["snowpipe", "ssv2"]) else "MEDIUM"
-            signals = []
-            if any(kw in combined for kw in ["snowpipe", "ssv2"]):
-                signals.append("Snowpipe Streaming explicitly mentioned")
-            if "kafka" in combined:
-                signals.append("Kafka mentioned — SSV2 Kafka connector opportunity")
-            if any(kw in combined for kw in ["real-time", "real time", "low latency"]):
-                signals.append("Real-time / low-latency requirement")
-            opps.append({**base, "PRODUCT": "SSV2 (Snowpipe Streaming)", "CONFIDENCE": confidence,
-                         "RATIONALE": f"Streaming/real-time data use case. {'; '.join(signals)}",
-                         "SIGNALS": signals})
+            signals = item.get("signals", [])
+            if isinstance(signals, str):
+                signals = [signals]
 
-        if any(kw in combined for kw in ["dynamic table", "continuous pipeline", "declarative pipeline", "materialized view", "incremental"]):
-            confidence = "HIGH" if "dynamic table" in combined else "MEDIUM"
-            signals = []
-            if "dynamic table" in combined:
-                signals.append("Dynamic Tables explicitly mentioned")
-            if any(kw in combined for kw in ["pipeline", "transformation", "etl"]):
-                signals.append("Data pipeline/transformation use case")
-            if "incremental" in combined:
-                signals.append("Incremental processing mentioned")
-            opps.append({**base, "PRODUCT": "Dynamic Tables", "CONFIDENCE": confidence,
-                         "RATIONALE": f"Data pipeline / transformation candidate. {'; '.join(signals)}",
-                         "SIGNALS": signals})
-        elif any(kw in combined for kw in ["pipeline", "transformation", "etl"]) and "dynamic table" not in combined:
-            opps.append({**base, "PRODUCT": "Dynamic Tables", "CONFIDENCE": "LOW",
-                         "RATIONALE": "Transformation/pipeline use case — could benefit from Dynamic Tables for declarative pipelines.",
-                         "SIGNALS": ["Data transformation/ETL keywords detected"]})
-
-        if any(kw in combined for kw in ["snowpark", "spark", "pyspark", "databricks", "python udf", "java udf"]):
-            confidence = "HIGH" if "snowpark" in combined else "MEDIUM"
-            signals = []
-            if "snowpark" in combined:
-                signals.append("Snowpark explicitly mentioned")
-            if any(kw in combined for kw in ["spark", "pyspark", "databricks"]):
-                signals.append("Spark/PySpark workload — Snowpark Connect migration opportunity")
-            if any(kw in combined for kw in ["python udf", "java udf"]):
-                signals.append("UDF development — Snowpark for custom compute")
-            opps.append({**base, "PRODUCT": "Snowpark", "CONFIDENCE": confidence,
-                         "RATIONALE": f"Compute/processing candidate. {'; '.join(signals)}",
-                         "SIGNALS": signals})
+            opps.append({
+                **base,
+                "PRODUCT": product,
+                "CONFIDENCE": confidence,
+                "RATIONALE": item.get("rationale", "Cortex AI-identified opportunity"),
+                "SIGNALS": signals,
+            })
 
     return pd.DataFrame(opps) if opps else pd.DataFrame(
         columns=["USE_CASE_ID", "ACCOUNT_NAME", "PRODUCT", "CONFIDENCE", "RATIONALE", "SIGNALS"]
@@ -134,18 +164,21 @@ def detect_opportunities(df):
 
 
 df = load_use_case_data(filter_sql)
-opps_df = detect_opportunities(df)
+
+with st.spinner("Analyzing use cases with Cortex AI..."):
+    raw_df = detect_opportunities_cortex(filter_sql)
+    opps_df = parse_llm_opportunities(raw_df)
 
 with st.container(border=True):
-    st.markdown("##### :material/info: How opportunities are detected")
+    st.markdown("##### :material/psychology: How opportunities are detected")
     st.caption(
-        "Opportunities are **automatically identified** by scanning each use case's SFDC fields: "
+        "Opportunities are **identified by Snowflake Cortex AI** (llama3.1-70b) which analyzes each use case's SFDC fields: "
         "**Technical Use Case**, **Workloads**, **Use Case Description**, **Incumbent Vendor**, and **Competitors**. "
-        "Keyword matching maps use cases to the 5 core AFE/PSS services. "
-        "**HIGH** confidence = explicit product mention (e.g., 'Openflow', 'Iceberg'). "
-        "**MEDIUM** = related keywords (e.g., 'CDC', 'lakehouse'). "
-        "**LOW** = broad match (e.g., 'ETL' → Dynamic Tables). "
-        "A single use case can generate multiple opportunities across different products."
+        "The LLM understands context, competitive dynamics, and technology patterns to map use cases to the 5 core AFE/PSS services. "
+        "**HIGH** confidence = strong explicit signals. "
+        "**MEDIUM** = related technology patterns. "
+        "**LOW** = indirect/inferred fit. "
+        "Results are cached for 10 minutes."
     )
 
 svc_metrics = st.columns(5)
@@ -175,7 +208,7 @@ if conf_filter and conf_filter != "All":
 filtered = filtered.sort_values("ACCOUNT_NAME", ascending=(sort_dir == "Asc"), na_position="last")
 
 if filtered.empty:
-    st.info("No product opportunities detected for the current filter. This may mean SFDC data lacks product-specific keywords for your use cases.", icon=":material/info:")
+    st.info("No product opportunities detected for the current filter. This may mean SFDC data lacks sufficient context for Cortex AI to identify opportunities.", icon=":material/info:")
     st.stop()
 
 ovc1, ovc2 = st.columns(2)
@@ -215,7 +248,7 @@ for acct in accounts:
         with hdr2:
             st.markdown(f"**{len(acct_opps)} opportunities** across: {products_str}")
             if high_count:
-                st.badge(f"{high_count} HIGH confidence", color="green")
+                st.markdown(f":green[{high_count} HIGH confidence]")
             st.caption(f"{status_badge} | **AE:** {first_row.get('OWNER_NAME') or 'N/A'} | **SE:** {first_row.get('LEAD_SE') or 'N/A'}")
         with hdr3:
             sfdc_url = f"https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{first_row['USE_CASE_ID']}/view"
@@ -247,4 +280,6 @@ for acct in accounts:
                         for sig in signals:
                             st.caption(f"  :material/check: {sig}")
                 with oc3:
-                    st.badge(opp["CONFIDENCE"], color=conf_color)
+                    color_map = {"green": "green", "orange": "orange", "gray": "gray"}
+                    color_name = color_map.get(conf_color, "gray")
+                    st.markdown(f":{color_name}[{opp['CONFIDENCE']}]")

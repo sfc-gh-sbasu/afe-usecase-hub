@@ -1,0 +1,18 @@
+definition_version: 2
+entities:
+  intelligence_hub:
+    type: streamlit
+    identifier:
+      name: DE_FIELD_USE_CASE_INTELLIGENCE_HUB
+      database: TEMP
+      schema: SBASU
+    query_warehouse: SE_AD_WH
+    pages_dir: app_pages/
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - pyproject.toml
+      - app_pages/use_cases.py
+      - app_pages/tech_stack.py
+      - app_pages/contacts.py
+      - app_pages/opportunities.py

@@ -176,9 +176,9 @@ def build_pdf():
          Paragraph("Full team roster per customer from SFDC team arrays - AEs, Lead SEs, "
                     "Workload FCTOs, Platform Specialists, and all other team members.", table_cell_style)],
         [Paragraph("Opportunities", table_cell_style),
-         Paragraph("AI-identified product expansion opportunities across 5 core services. "
-                    "Scans SFDC metadata for product keywords and assigns HIGH/MEDIUM/LOW confidence. "
-                    "Grouped by customer with signal-level detail.", table_cell_style)],
+         Paragraph("Cortex AI-powered product expansion opportunities across 5 core services. "
+                    "Uses Snowflake Cortex LLM (llama3.1-70b) to analyze SFDC metadata and identify "
+                    "opportunities with HIGH/MEDIUM/LOW confidence. Grouped by customer with signal-level detail.", table_cell_style)],
     ]
     t = Table(pages_data, colWidths=[1.5 * inch, 5.2 * inch])
     t.setStyle(TableStyle([
@@ -338,11 +338,24 @@ def build_pdf():
     story.append(Paragraph("6. Opportunity Detection Methodology", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
     story.append(Paragraph(
-        "The Opportunities page automatically identifies product expansion opportunities by scanning "
-        "SFDC use case metadata. Here is how it works:", body_style))
+        "The Opportunities page uses <b>Snowflake Cortex AI</b> (llama3.1-70b) to analyze each use case's "
+        "SFDC metadata and identify product expansion opportunities. Unlike simple keyword matching, the LLM "
+        "understands context, competitive dynamics, and technology patterns.", body_style))
 
-    story.append(Paragraph("<b>Fields Scanned:</b>", h2_style))
-    fields = ["TECHNICAL_USE_CASE", "WORKLOADS", "USE_CASE_DESCRIPTION", "INCUMBENT_VENDOR", "COMPETITORS"]
+    story.append(Paragraph("<b>How It Works:</b>", h2_style))
+    steps = [
+        "Each use case's SFDC fields are sent to Cortex COMPLETE (llama3.1-70b) via SQL",
+        "The LLM analyzes Technical Use Case, Workloads, Description, Incumbent Vendor, and Competitors",
+        "It returns structured JSON with product matches, confidence levels, rationale, and evidence signals",
+        "Results are parsed and displayed grouped by customer with signal-level detail",
+        "Responses are cached for 10 minutes to avoid repeated LLM calls",
+    ]
+    for s in steps:
+        story.append(Paragraph(u"\u2022  " + s, bullet_style))
+
+    story.append(Paragraph("<b>Fields Analyzed:</b>", h2_style))
+    fields = ["TECHNICAL_USE_CASE", "WORKLOADS", "USE_CASE_DESCRIPTION", "INCUMBENT_VENDOR", "COMPETITORS",
+              "ACCOUNT_INDUSTRY", "CLOUD_PROVIDER"]
     for f in fields:
         story.append(Paragraph(u"\u2022  " + f, bullet_style))
 
@@ -352,14 +365,14 @@ def build_pdf():
          Paragraph("<b>Criteria</b>", table_header_style),
          Paragraph("<b>Example</b>", table_header_style)],
         [Paragraph("HIGH", table_cell_style),
-         Paragraph("Explicit product name mentioned in SFDC fields", table_cell_style),
-         Paragraph("'Openflow' in Technical Use Case, 'Iceberg' in Workloads", table_cell_style)],
+         Paragraph("Strong explicit signals — product mentioned or very direct match", table_cell_style),
+         Paragraph("'CDC replication from Oracle' = HIGH for Openflow", table_cell_style)],
         [Paragraph("MEDIUM", table_cell_style),
-         Paragraph("Related technology keywords detected", table_cell_style),
-         Paragraph("'CDC', 'lakehouse', 'Kafka', 'Spark', 'real-time'", table_cell_style)],
+         Paragraph("Related technology patterns inferred by LLM", table_cell_style),
+         Paragraph("'Real-time data pipeline' = MEDIUM for SSV2", table_cell_style)],
         [Paragraph("LOW", table_cell_style),
-         Paragraph("Broad match on general data patterns", table_cell_style),
-         Paragraph("'ETL' or 'pipeline' mapped to Dynamic Tables", table_cell_style)],
+         Paragraph("Indirect or inferred fit based on broader context", table_cell_style),
+         Paragraph("'Data warehouse modernization' = LOW for Dynamic Tables", table_cell_style)],
     ]
     t4 = Table(conf_data, colWidths=[1 * inch, 2.7 * inch, 3 * inch])
     t4.setStyle(TableStyle([
@@ -378,7 +391,14 @@ def build_pdf():
     story.append(Spacer(1, 10))
     story.append(Paragraph(
         "<b>Note:</b> A single use case can generate multiple opportunities across different products. "
-        "Each opportunity includes a list of specific signals (keywords detected) that triggered the match.", body_style))
+        "Each opportunity includes LLM-generated rationale and specific evidence signals. "
+        "The LLM also detects displacement opportunities when competing products are mentioned.", body_style))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "<b>Technical Detail:</b> The Cortex AI call is executed server-side via SQL using "
+        "SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b', ...) — no data leaves Snowflake. "
+        "The system prompt instructs the LLM to return structured JSON with product, confidence, "
+        "rationale, and signals for each identified opportunity.", body_style))
     story.append(PageBreak())
 
     # ---- SECTION 7: ACCESS CONTROL ----
@@ -469,20 +489,24 @@ def build_pdf():
 
     story.append(Paragraph("<b>Current Deployment: Local</b>", h2_style))
     story.append(Paragraph(
-        "The app currently runs locally using the Snowhouse Snowflake connection:", body_style))
+        "The app runs locally for development and is deployed centrally on Snowhouse SiS:", body_style))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("<b>Local Development:</b>", h2_style))
     story.append(Paragraph(
         "SNOWHOUSE_CONNECTION_NAME=snowhouse streamlit run streamlit_app.py --server.port 8502", code_style))
     story.append(Spacer(1, 6))
-    story.append(Paragraph("<b>Connection:</b> Snowhouse (SFCOGSOPS-SNOWHOUSE_AWS_US_WEST_2)", body_style))
+    story.append(Paragraph("<b>Central Deployment: Streamlit in Snowflake (SiS)</b>", h2_style))
+    story.append(Paragraph("<b>Location:</b> TEMP.SBASU.DE_FIELD_USE_CASE_INTELLIGENCE_HUB", body_style))
+    story.append(Paragraph("<b>Account:</b> Snowhouse (SFCOGSOPS-SNOWHOUSE_AWS_US_WEST_2)", body_style))
     story.append(Paragraph("<b>Role:</b> SALES_ENGINEER", body_style))
     story.append(Paragraph("<b>Warehouse:</b> SE_AD_WH", body_style))
-
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Target Deployment: Streamlit in Snowflake (SiS)</b>", h2_style))
+    story.append(Paragraph("<b>Runtime:</b> Native (non-container)", body_style))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("<b>Deploy command:</b>", body_style))
     story.append(Paragraph(
-        "The app is designed for deployment as a Streamlit in Snowflake (SiS) application, "
-        "which would make it centrally available to all Snowflake employees. The codebase already "
-        "includes dual-mode connection handling:", body_style))
+        "cd /Users/sbasu/afe-usecase-hub &amp;&amp; snow streamlit deploy --replace --connection snowhouse", code_style))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("<b>Dual-mode connection handling:</b>", body_style))
     items = [
         "<b>SiS mode:</b> Uses get_active_session() from snowflake.snowpark.context - no credentials needed",
         "<b>Local mode:</b> Falls back to snowflake.connector with Snowhouse connection name",
@@ -491,9 +515,8 @@ def build_pdf():
         story.append(Paragraph(u"\u2022  " + item, bullet_style))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "SiS deployment requires uploading the app to a Snowflake stage and creating a "
-        "Streamlit application object. The app will automatically detect SiS mode and use "
-        "the Snowpark session for all queries.", body_style))
+        "The SiS app is accessible to all Snowflake employees with SALES_ENGINEER role on Snowhouse. "
+        "Identity-based access control ensures users only see their own use cases.", body_style))
     story.append(PageBreak())
 
     # ---- SECTION 10: FAQ ----
