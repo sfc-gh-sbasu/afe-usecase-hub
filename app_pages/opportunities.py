@@ -46,7 +46,7 @@ def safe_int(v, default=0):
 
 
 @st.cache_data(ttl=300)
-def load_use_case_data(_filter):
+def load_use_case_data(filter_str):
     return run_query(f"""
         SELECT
             USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_ID, ACCOUNT_INDUSTRY,
@@ -58,14 +58,14 @@ def load_use_case_data(_filter):
             OWNER_NAME, USE_CASE_LEAD_SE_NAME,
             DAYS_IN_STAGE, MEDDPICC_IDENTIFY_PAIN
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
 
 
 @st.cache_data(ttl=600)
-def detect_opportunities_cortex(_filter):
+def detect_opportunities_cortex(filter_str):
     result_df = run_query(f"""
         WITH use_cases AS (
             SELECT
@@ -77,7 +77,7 @@ def detect_opportunities_cortex(_filter):
                 OWNER_NAME, USE_CASE_LEAD_SE_NAME,
                 IS_WON, IN_POC
             FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-            WHERE ({_filter})
+            WHERE ({filter_str})
               AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
         )
         SELECT
@@ -163,11 +163,7 @@ def parse_llm_opportunities(result_df):
     )
 
 
-df = load_use_case_data(filter_sql)
-
-with st.spinner("Analyzing use cases with Cortex AI..."):
-    raw_df = detect_opportunities_cortex(filter_sql)
-    opps_df = parse_llm_opportunities(raw_df)
+selected_names = st.session_state.get("selected_account_names", [])
 
 with st.container(border=True):
     st.markdown("##### :material/psychology: How opportunities are detected")
@@ -180,6 +176,42 @@ with st.container(border=True):
         "**LOW** = indirect/inferred fit. "
         "Results are cached for 10 minutes."
     )
+
+if not selected_names:
+    st.info("Select accounts from the sidebar to analyze opportunities.", icon=":material/filter_list:")
+    st.stop()
+
+selected_filter = filter_sql
+acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
+selected_filter = f"({filter_sql}) AND ACCOUNT_NAME IN ({acct_list})"
+
+df = load_use_case_data(selected_filter)
+
+st.info(
+    f"Cortex AI will analyze **{len(df)}** use cases across **{len(selected_names)}** selected account(s). "
+    f"To minimize LLM costs, select only the accounts you need from the sidebar.",
+    icon=":material/toll:"
+)
+
+run_analysis = st.button(":material/psychology: Run Cortex AI Analysis", type="primary", key="run_opp_analysis")
+
+if not run_analysis and "opp_results" not in st.session_state:
+    st.caption("Click the button above to start the analysis.")
+    st.stop()
+
+if run_analysis:
+    with st.spinner("Analyzing use cases with Cortex AI... This may take a minute."):
+        raw_df = detect_opportunities_cortex(selected_filter)
+        opps_df = parse_llm_opportunities(raw_df)
+        st.session_state.opp_results = opps_df
+        st.session_state.opp_filter_key = selected_filter
+elif st.session_state.get("opp_filter_key") == selected_filter:
+    opps_df = st.session_state.opp_results
+else:
+    del st.session_state["opp_results"]
+    del st.session_state["opp_filter_key"]
+    st.info("Account selection changed. Click **Run Cortex AI Analysis** to refresh results.", icon=":material/refresh:")
+    st.stop()
 
 svc_metrics = st.columns(5)
 for col, svc in zip(svc_metrics, FIVE_SERVICES):

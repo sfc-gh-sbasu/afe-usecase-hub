@@ -23,6 +23,12 @@ def load_contacts(_filter):
 
 df = load_contacts(filter_sql)
 
+selected_names = st.session_state.get("selected_account_names", [])
+selected_filter = filter_sql
+if selected_names:
+    acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
+    selected_filter = f"({filter_sql}) AND ACCOUNT_NAME IN ({acct_list})"
+
 @st.cache_data(ttl=300)
 def load_flattened_team(_filter):
     return run_query(f"""
@@ -47,9 +53,18 @@ def load_flattened_team(_filter):
     """)
 
 try:
-    team_df = load_flattened_team(filter_sql)
+    team_df = load_flattened_team(selected_filter)
 except Exception:
     team_df = pd.DataFrame()
+
+total_accounts = df["ACCOUNT_NAME"].nunique()
+loaded_accounts = len(selected_names)
+if loaded_accounts < total_accounts:
+    st.info(
+        f":material/speed: Contacts loaded for **{loaded_accounts}** of **{total_accounts}** accounts. "
+        f"Select more from the sidebar.",
+        icon=":material/info:"
+    )
 
 total_contacts = len(team_df) if not team_df.empty else 0
 unique_people = team_df["CONTACT_NAME"].nunique() if not team_df.empty else 0
@@ -66,7 +81,7 @@ fc1, fc2 = st.columns([3, 2])
 search = fc1.text_input(":material/search: Search", placeholder="Name, role, customer...", key="ct_search")
 sort_col = fc2.selectbox("Sort by", ["Customer", "Lead SE", "AE"], key="ct_sort")
 
-customers = sorted(df["ACCOUNT_NAME"].dropna().unique())
+customers = sorted([c for c in df["ACCOUNT_NAME"].dropna().unique() if c in selected_names])
 
 for customer in customers:
     if search and search.lower() not in customer.lower():

@@ -50,104 +50,39 @@ def load_product_usage_for_tech(sfdc_account_ids_csv):
     if not sfdc_account_ids_csv:
         return pd.DataFrame()
 
-    openflow_df = run_query(f"""
-        SELECT SALESFORCE_ACCOUNT_ID, 'Openflow' as PRODUCT,
-               COUNT(DISTINCT CONNECTOR_NAME) as METRIC_COUNT,
-               SUM(BYTES_SENT)/1e9 as TOTAL_GB,
-               LISTAGG(DISTINCT CONNECTOR_NAME, ', ') WITHIN GROUP (ORDER BY CONNECTOR_NAME) as DETAIL,
-               MAX(DS) as LAST_SEEN
-        FROM SNOWSCIENCE.OPENFLOW.OPENFLOW_CONNECTORS
-        WHERE SALESFORCE_ACCOUNT_ID IN ({sfdc_account_ids_csv})
-        GROUP BY 1
+    sfdc_ids_list = [s.strip().strip("'") for s in sfdc_account_ids_csv.split(",") if s.strip()]
+    sfdc_values = ",\n".join([f"('{sid}')" for sid in sfdc_ids_list])
+
+    return run_query(f"""
+        WITH sfdc_filter AS (SELECT $1 as SFDC_ID FROM VALUES {sfdc_values})
+        SELECT t.SALESFORCE_ACCOUNT_ID, t.PRODUCT, t.METRIC_COUNT, t.METRIC_LABEL,
+               t.TOTAL_GB, t.DETAIL, t.LAST_SEEN
+        FROM TEMP.SBASU.HUB_PRODUCT_TELEMETRY t
+        JOIN sfdc_filter sf ON t.SALESFORCE_ACCOUNT_ID = sf.SFDC_ID
     """)
 
-    account_map_df = run_query(f"""
-        SELECT DISTINCT SNOWFLAKE_DEPLOYMENT, CAST(SNOWFLAKE_ACCOUNT_ID AS INTEGER) as SNOWFLAKE_ACCOUNT_ID,
-               SALESFORCE_ACCOUNT_ID
-        FROM SNOWSCIENCE.DIMENSIONS.DIM_ACCOUNTS_HISTORY
-        WHERE SALESFORCE_ACCOUNT_ID IN ({sfdc_account_ids_csv})
-          AND GENERAL_DATE = (SELECT MAX(GENERAL_DATE) FROM SNOWSCIENCE.DIMENSIONS.DIM_ACCOUNTS_HISTORY)
-          AND ACCOUNT_STATUS = 'Active' AND SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
-    """)
 
-    iceberg_df = pd.DataFrame()
-    ssv2_df = pd.DataFrame()
+all_df = load_tech_data(filter_sql)
+total_accounts = all_df["ACCOUNT_NAME"].nunique()
 
-    if not account_map_df.empty:
-        account_map_df = account_map_df.dropna(subset=["SNOWFLAKE_DEPLOYMENT", "SNOWFLAKE_ACCOUNT_ID"])
-        account_map_df = account_map_df[account_map_df["SNOWFLAKE_DEPLOYMENT"].astype(str).str.strip() != ""]
+selected_ids = st.session_state.get("selected_sfdc_ids", [])
+selected_names = st.session_state.get("selected_account_names", [])
 
-    if not account_map_df.empty:
-        conditions = " OR ".join([
-            f"(DEPLOYMENT = '{r['SNOWFLAKE_DEPLOYMENT']}' AND ACCOUNT_ID = {safe_int(r['SNOWFLAKE_ACCOUNT_ID'])})"
-            for _, r in account_map_df.iterrows()
-        ])
+df = all_df[all_df["ACCOUNT_NAME"].isin(selected_names)] if selected_names else all_df
 
-        iceberg_df = run_query(f"""
-            WITH latest_day AS (
-                SELECT DEPLOYMENT, ACCOUNT_ID, MAX(DS) as MAX_DS
-                FROM SNOWSCIENCE.PRODUCT.ICEBERG_DAILY_ACCOUNT_AGG
-                WHERE DS >= DATEADD(day, -90, CURRENT_DATE()) AND ({conditions})
-                GROUP BY 1, 2
-            )
-            SELECT a.DEPLOYMENT, a.ACCOUNT_ID, 'Iceberg' as PRODUCT,
-                   SUM(a.QUALIFIED_TABLE_COUNT) as METRIC_COUNT,
-                   SUM(a.ACTIVE_BYTES)/1e9 as TOTAL_GB,
-                   MAX(a.DS) as LAST_SEEN
-            FROM SNOWSCIENCE.PRODUCT.ICEBERG_DAILY_ACCOUNT_AGG a
-            JOIN latest_day ld ON a.DEPLOYMENT = ld.DEPLOYMENT AND a.ACCOUNT_ID = ld.ACCOUNT_ID AND a.DS = ld.MAX_DS
-            GROUP BY 1, 2
-        """)
-
-        if not iceberg_df.empty:
-            sfdc_map = {(r['SNOWFLAKE_DEPLOYMENT'], r['SNOWFLAKE_ACCOUNT_ID']): r['SALESFORCE_ACCOUNT_ID']
-                        for _, r in account_map_df.iterrows()}
-            iceberg_df["SALESFORCE_ACCOUNT_ID"] = iceberg_df.apply(
-                lambda r: sfdc_map.get((r["DEPLOYMENT"], r["ACCOUNT_ID"])), axis=1)
-
-        ssv2_df = run_query(f"""
-            SELECT DEPLOYMENT, ACCOUNT_ID, 'SSV2' as PRODUCT,
-                   COUNT(DISTINCT CHANNEL_NAME) as METRIC_COUNT,
-                   SUM(APPEND_BYTES_COUNT)/1e9 as TOTAL_GB,
-                   MAX(DS) as LAST_SEEN
-            FROM SNOWSCIENCE.SNOWPIPE.SSV2_CHANNEL_METRICS
-            WHERE DS >= DATEADD(day, -90, CURRENT_DATE()) AND ({conditions})
-            GROUP BY 1, 2
-        """)
-
-        if not ssv2_df.empty:
-            sfdc_map = {(r['SNOWFLAKE_DEPLOYMENT'], r['SNOWFLAKE_ACCOUNT_ID']): r['SALESFORCE_ACCOUNT_ID']
-                        for _, r in account_map_df.iterrows()}
-            ssv2_df["SALESFORCE_ACCOUNT_ID"] = ssv2_df.apply(
-                lambda r: sfdc_map.get((r["DEPLOYMENT"], r["ACCOUNT_ID"])), axis=1)
-
-    rows = []
-    if not openflow_df.empty:
-        for _, r in openflow_df.iterrows():
-            rows.append({"SALESFORCE_ACCOUNT_ID": r["SALESFORCE_ACCOUNT_ID"], "PRODUCT": "Openflow",
-                         "METRIC_COUNT": safe_int(r["METRIC_COUNT"]), "METRIC_LABEL": "Connectors",
-                         "TOTAL_GB": safe_float(r["TOTAL_GB"]), "DETAIL": str(r["DETAIL"] or ""),
-                         "LAST_SEEN": r["LAST_SEEN"]})
-    if not iceberg_df.empty:
-        for _, r in iceberg_df.iterrows():
-            rows.append({"SALESFORCE_ACCOUNT_ID": r.get("SALESFORCE_ACCOUNT_ID"), "PRODUCT": "Iceberg",
-                         "METRIC_COUNT": safe_int(r["METRIC_COUNT"]), "METRIC_LABEL": "Active Tables",
-                         "TOTAL_GB": safe_float(r["TOTAL_GB"]), "DETAIL": f"{safe_int(r['METRIC_COUNT']):,} active tables",
-                         "LAST_SEEN": r["LAST_SEEN"]})
-    if not ssv2_df.empty:
-        for _, r in ssv2_df.iterrows():
-            rows.append({"SALESFORCE_ACCOUNT_ID": r.get("SALESFORCE_ACCOUNT_ID"), "PRODUCT": "SSV2",
-                         "METRIC_COUNT": safe_int(r["METRIC_COUNT"]), "METRIC_LABEL": "Channels",
-                         "TOTAL_GB": safe_float(r["TOTAL_GB"]), "DETAIL": f"{safe_int(r['METRIC_COUNT'])} streaming channels",
-                         "LAST_SEEN": r["LAST_SEEN"]})
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
-
-
-df = load_tech_data(filter_sql)
-
-sfdc_ids = df["ACCOUNT_ID"].dropna().unique().tolist()
-sfdc_ids_csv = ",".join([f"'{aid}'" for aid in sfdc_ids]) if sfdc_ids else ""
+if selected_ids:
+    sfdc_ids_csv = ",".join([f"'{aid}'" for aid in selected_ids])
+else:
+    sfdc_ids_csv = ""
 usage_df = load_product_usage_for_tech(sfdc_ids_csv)
+
+loaded_accounts = len(selected_names) if selected_names else total_accounts
+if loaded_accounts < total_accounts:
+    st.info(
+        f"Showing **{loaded_accounts}** of **{total_accounts}** accounts (top 10 by EACV + ACV). "
+        f"Select more accounts from the sidebar dropdown.",
+        icon=":material/filter_list:"
+    )
 
 
 def derive_products(row):

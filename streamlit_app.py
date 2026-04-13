@@ -164,4 +164,60 @@ if not st.session_state.get("filter_sql"):
     st.info("Select a filter from the sidebar to get started.", icon=":material/filter_alt:")
     st.stop()
 
+
+@st.cache_data(ttl=300)
+def load_all_accounts(_filter):
+    return run_query(f"""
+        SELECT ACCOUNT_NAME, ACCOUNT_ID,
+               MAX(COALESCE(USE_CASE_EACV, 0)) as MAX_EACV,
+               MAX(COALESCE(ACCOUNT_BASE_RENEWAL_ACV, 0)) as MAX_ACV,
+               COUNT(*) as UC_COUNT
+        FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+        WHERE ({_filter})
+          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+        GROUP BY 1, 2
+        ORDER BY MAX_EACV DESC, MAX_ACV DESC, UC_COUNT DESC
+    """)
+
+account_list_df = load_all_accounts(st.session_state.filter_sql)
+
+with st.sidebar:
+    st.divider()
+    total_accounts = len(account_list_df)
+    all_account_names = account_list_df["ACCOUNT_NAME"].tolist() if not account_list_df.empty else []
+    top_10 = all_account_names[:10]
+
+    TOP_10_LABEL = "⭐ Top 10 (by EACV + ACV)"
+
+    st.markdown(f":material/business: **Accounts** ({total_accounts} total)")
+    st.caption("Showing top 10 by EACV + ACV. Select more or fewer accounts below.")
+
+    selected_accounts = st.multiselect(
+        ":material/filter_list: Select accounts to load details",
+        options=[TOP_10_LABEL] + all_account_names,
+        default=[TOP_10_LABEL],
+        key="selected_accounts",
+        placeholder="Choose accounts..."
+    )
+
+    if not selected_accounts:
+        st.warning("Select at least one account", icon=":material/warning:")
+        st.stop()
+
+    if TOP_10_LABEL in selected_accounts:
+        resolved_accounts = list(dict.fromkeys(top_10 + [a for a in selected_accounts if a != TOP_10_LABEL]))
+    else:
+        resolved_accounts = [a for a in selected_accounts if a != TOP_10_LABEL]
+
+    if not resolved_accounts:
+        st.warning("Select at least one account", icon=":material/warning:")
+        st.stop()
+
+    selected_ids = account_list_df[account_list_df["ACCOUNT_NAME"].isin(resolved_accounts)]["ACCOUNT_ID"].dropna().tolist()
+    st.session_state.selected_sfdc_ids = selected_ids
+    st.session_state.selected_account_names = resolved_accounts
+
+    if TOP_10_LABEL in selected_accounts and len(selected_accounts) == 1:
+        st.info(f"Showing top 10 accounts by EACV + ACV out of {total_accounts} total. To see other accounts, select from the dropdown above.", icon=":material/info:")
+
 page.run()
