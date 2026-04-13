@@ -114,10 +114,11 @@ def build_pdf():
         "4. Data Sources and Architecture",
         "5. The Five Core DE AFE/PSS Services",
         "6. Opportunity Detection Methodology",
-        "7. Access Control and Identity",
-        "8. GitHub Repository",
-        "9. Deployment Details",
-        "10. FAQ and Troubleshooting",
+        "7. Performance: Pre-computed Tables",
+        "8. Access Control and Identity",
+        "9. GitHub Repository",
+        "10. Deployment Details",
+        "11. FAQ and Troubleshooting",
     ]
     for item in toc_items:
         story.append(Paragraph(item, ParagraphStyle(
@@ -219,18 +220,34 @@ def build_pdf():
     for item in items:
         story.append(Paragraph(u"\u2022  " + item, bullet_style))
 
-    story.append(Paragraph("<b>Step 3: Navigate Pages</b>", h2_style))
+    story.append(Paragraph("<b>Step 3: Select Accounts</b>", h2_style))
+    story.append(Paragraph(
+        "After choosing a filter, the sidebar shows a global <b>account picker</b> with all matching accounts. "
+        "By default, the top 10 accounts (ranked by EACV + ACV) are pre-selected via the "
+        '<b>"\u2b50 Top 10 (by EACV + ACV)"</b> shortcut option. You can:', body_style))
+    acct_items = [
+        "Keep the Top 10 shortcut selected for a quick overview of your most important accounts",
+        "Remove it and select individual accounts to focus on specific customers",
+        "Keep Top 10 AND add more accounts to expand your view beyond the default",
+    ]
+    for item in acct_items:
+        story.append(Paragraph(u"\u2022  " + item, bullet_style))
+    story.append(Paragraph(
+        "All pages (Use Cases, Tech Stack, Contacts) instantly reflect your account selection. "
+        "The Opportunities page requires an explicit button click to run Cortex AI analysis.", body_style))
+
+    story.append(Paragraph("<b>Step 4: Navigate Pages</b>", h2_style))
     story.append(Paragraph(
         "Use the left sidebar navigation to switch between Use Cases, Tech Stack, Contacts, "
-        "and Opportunities. Each page respects the active filter.", body_style))
+        "and Opportunities. Each page respects the active filter and account selection.", body_style))
 
-    story.append(Paragraph("<b>Step 4: Search and Sort</b>", h2_style))
+    story.append(Paragraph("<b>Step 5: Search and Sort</b>", h2_style))
     story.append(Paragraph(
         "Every page has a search bar and sort controls. Search works across all visible fields "
         "(customer name, product, role, rationale, etc.). Service-specific filters are available "
         "on Tech Stack and Opportunities pages.", body_style))
 
-    story.append(Paragraph("<b>Step 5: Drill Down</b>", h2_style))
+    story.append(Paragraph("<b>Step 6: Drill Down</b>", h2_style))
     story.append(Paragraph(
         "Click expanders or cards to see full detail per customer: use case descriptions, "
         "competitive context, MEDDPICC pain, product telemetry, opportunity signals, and "
@@ -242,8 +259,9 @@ def build_pdf():
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
 
     story.append(Paragraph(
-        "The Hub queries Snowhouse <b>live</b> - there is no ETL pipeline or staging database. "
-        "All data is as fresh as the source systems.", body_style))
+        "The Hub uses a hybrid architecture: <b>SFDC use case data</b> is queried live from Snowhouse, while "
+        "<b>product telemetry</b> (Openflow, Iceberg, SSV2) and <b>Gong meetings</b> are pre-computed into "
+        "optimized tables refreshed daily by a Snowflake Task.", body_style))
 
     ds_data = [
         [Paragraph("<b>Data Source</b>", table_header_style),
@@ -270,6 +288,12 @@ def build_pdf():
         [Paragraph("Gong Meetings", table_cell_style),
          Paragraph("FIVETRAN.SALESFORCE.GONG_GONG_CALL_C", table_cell_style),
          Paragraph("Recent call briefs, key points, and next steps (last 3 months)", table_cell_style)],
+        [Paragraph("Pre-computed Telemetry", table_cell_style),
+         Paragraph("TEMP.SBASU.HUB_PRODUCT_TELEMETRY", table_cell_style),
+         Paragraph("Nightly snapshot of Openflow/Iceberg/SSV2 metrics per SFDC account (fast reads)", table_cell_style)],
+        [Paragraph("Pre-computed Gong", table_cell_style),
+         Paragraph("TEMP.SBASU.HUB_GONG_MEETINGS", table_cell_style),
+         Paragraph("Nightly snapshot of Gong call data for all active accounts (fast reads)", table_cell_style)],
     ]
     t2 = Table(ds_data, colWidths=[1.3 * inch, 2.5 * inch, 2.9 * inch])
     t2.setStyle(TableStyle([
@@ -286,8 +310,10 @@ def build_pdf():
     ]))
     story.append(t2)
     story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Architecture:</b> Streamlit app -> snowflake.connector (Snowhouse connection) -> Live SQL queries. "
-                           "Results cached with @st.cache_data (5-10 minute TTL). No intermediate database or ETL.", body_style))
+    story.append(Paragraph("<b>Architecture:</b> Streamlit app reads SFDC data live from Snowhouse via SQL. "
+                           "Product telemetry and Gong meetings are read from pre-computed tables "
+                           "(TEMP.SBASU.HUB_PRODUCT_TELEMETRY and HUB_GONG_MEETINGS) refreshed nightly by a Snowflake Task. "
+                           "Results cached with @st.cache_data (5-10 minute TTL).", body_style))
     story.append(Paragraph("<b>Note:</b> Dynamic Tables and Snowpark telemetry are NOT yet available in Snowhouse. "
                            "The dashboard shows an info message for these two services.", caption_style))
     story.append(PageBreak())
@@ -342,13 +368,22 @@ def build_pdf():
         "SFDC metadata and identify product expansion opportunities. Unlike simple keyword matching, the LLM "
         "understands context, competitive dynamics, and technology patterns.", body_style))
 
+    story.append(Paragraph("<b>On-Demand Execution:</b>", h2_style))
+    story.append(Paragraph(
+        "To minimize LLM costs, the Opportunities page does <b>not</b> auto-run Cortex AI. Instead, "
+        "users select their target accounts from the sidebar and click the <b>\"Run Cortex AI Analysis\"</b> "
+        "button. This ensures LLM calls are scoped to only the accounts you need, rather than processing "
+        "all use cases on every page load.", body_style))
+
     story.append(Paragraph("<b>How It Works:</b>", h2_style))
     steps = [
+        "User selects target accounts from the sidebar account picker",
+        "User clicks 'Run Cortex AI Analysis' to trigger the LLM",
         "Each use case's SFDC fields are sent to Cortex COMPLETE (llama3.1-70b) via SQL",
         "The LLM analyzes Technical Use Case, Workloads, Description, Incumbent Vendor, and Competitors",
         "It returns structured JSON with product matches, confidence levels, rationale, and evidence signals",
         "Results are parsed and displayed grouped by customer with signal-level detail",
-        "Responses are cached for 10 minutes to avoid repeated LLM calls",
+        "Results are cached in session state; changing accounts prompts a re-run",
     ]
     for s in steps:
         story.append(Paragraph(u"\u2022  " + s, bullet_style))
@@ -401,8 +436,58 @@ def build_pdf():
         "rationale, and signals for each identified opportunity.", body_style))
     story.append(PageBreak())
 
-    # ---- SECTION 7: ACCESS CONTROL ----
-    story.append(Paragraph("7. Access Control and Identity", h1_style))
+    # ---- SECTION 7: PERFORMANCE ----
+    story.append(Paragraph("7. Performance: Pre-computed Tables", h1_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
+    story.append(Paragraph(
+        "To ensure fast page loads (under 2 seconds), product telemetry and Gong meeting data are "
+        "pre-computed into optimized tables on Snowhouse. A nightly Snowflake Task refreshes the data.", body_style))
+
+    perf_data = [
+        [Paragraph("<b>Object</b>", table_header_style),
+         Paragraph("<b>Type</b>", table_header_style),
+         Paragraph("<b>Description</b>", table_header_style)],
+        [Paragraph("HUB_PRODUCT_TELEMETRY", table_cell_style),
+         Paragraph("Table", table_cell_style),
+         Paragraph("Pre-aggregated Openflow, Iceberg, and SSV2 telemetry for all SFDC accounts (~6K rows)", table_cell_style)],
+        [Paragraph("HUB_GONG_MEETINGS", table_cell_style),
+         Paragraph("Table", table_cell_style),
+         Paragraph("Last 3 months of Gong call data for all active accounts (~23K rows)", table_cell_style)],
+        [Paragraph("HUB_REFRESH_ALL()", table_cell_style),
+         Paragraph("Stored Procedure", table_cell_style),
+         Paragraph("Populates both tables by querying Openflow, Iceberg, SSV2, DIM_ACCOUNTS_HISTORY, and Gong", table_cell_style)],
+        [Paragraph("HUB_DAILY_REFRESH", table_cell_style),
+         Paragraph("Task", table_cell_style),
+         Paragraph("Runs HUB_REFRESH_ALL() daily at midnight ET on SE_AD_WH", table_cell_style)],
+    ]
+    tp = Table(perf_data, colWidths=[2 * inch, 1.3 * inch, 3.4 * inch])
+    tp.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), SNOWFLAKE_DARK),
+        ('TEXTCOLOR', (0, 0), (-1, 0), WHITE),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#DDE1E6")),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, LIGHT_GRAY]),
+    ]))
+    story.append(tp)
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "<b>Schema:</b> All pre-computed objects are in <b>TEMP.SBASU</b> on Snowhouse.", body_style))
+    story.append(Paragraph(
+        "<b>Before vs After:</b> Page loads went from 15-30 seconds (4 sequential Snowhouse queries per page) "
+        "to under 2 seconds (single pre-computed table read). The Cortex AI opportunity analysis is "
+        "on-demand only, triggered by user action.", body_style))
+    story.append(Paragraph(
+        "<b>Manual Refresh:</b> To force a refresh outside the daily schedule, run: "
+        "CALL TEMP.SBASU.HUB_REFRESH_ALL();", body_style))
+    story.append(PageBreak())
+
+    # ---- SECTION 8: ACCESS CONTROL ----
+    story.append(Paragraph("8. Access Control and Identity", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
     story.append(Paragraph(
         "The dashboard implements automatic, identity-based access control:", body_style))
@@ -442,8 +527,8 @@ def build_pdf():
         "ACCOUNT_SE_DIRECTOR, ACCOUNT_SE_VP, etc.).", body_style))
     story.append(PageBreak())
 
-    # ---- SECTION 8: GITHUB ----
-    story.append(Paragraph("8. GitHub Repository", h1_style))
+    # ---- SECTION 9: GITHUB ----
+    story.append(Paragraph("9. GitHub Repository", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
 
     story.append(Paragraph("<b>Repository:</b> sfc-gh-sbasu/afe-usecase-hub", body_style))
@@ -465,7 +550,11 @@ def build_pdf():
         [Paragraph("app_pages/contacts.py", table_cell_style),
          Paragraph("Team roster from SFDC team arrays (LATERAL FLATTEN)", table_cell_style)],
         [Paragraph("app_pages/opportunities.py", table_cell_style),
-         Paragraph("AI-identified product opportunities with confidence scoring", table_cell_style)],
+         Paragraph("On-demand AI-identified product opportunities with confidence scoring", table_cell_style)],
+        [Paragraph("generate_docs_pdf.py", table_cell_style),
+         Paragraph("Generates this PDF documentation guide (reportlab)", table_cell_style)],
+        [Paragraph("snowflake.yml", table_cell_style),
+         Paragraph("Snowflake CLI config for SiS deployment", table_cell_style)],
     ]
     t6 = Table(file_data, colWidths=[2.2 * inch, 4.5 * inch])
     t6.setStyle(TableStyle([
@@ -483,8 +572,8 @@ def build_pdf():
     story.append(t6)
     story.append(PageBreak())
 
-    # ---- SECTION 9: DEPLOYMENT ----
-    story.append(Paragraph("9. Deployment Details", h1_style))
+    # ---- SECTION 10: DEPLOYMENT ----
+    story.append(Paragraph("10. Deployment Details", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
 
     story.append(Paragraph("<b>Current Deployment: Local</b>", h2_style))
@@ -517,10 +606,16 @@ def build_pdf():
     story.append(Paragraph(
         "The SiS app is accessible to all Snowflake employees with SALES_ENGINEER role on Snowhouse. "
         "Identity-based access control ensures users only see their own use cases.", body_style))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("<b>Nightly Data Refresh:</b>", h2_style))
+    story.append(Paragraph(
+        "A Snowflake Task (TEMP.SBASU.HUB_DAILY_REFRESH) runs the stored procedure HUB_REFRESH_ALL() "
+        "at midnight ET daily on SE_AD_WH. This populates the pre-computed telemetry and Gong tables "
+        "so that page loads remain fast. SFDC data is always queried live.", body_style))
     story.append(PageBreak())
 
-    # ---- SECTION 10: FAQ ----
-    story.append(Paragraph("10. FAQ and Troubleshooting", h1_style))
+    # ---- SECTION 11: FAQ ----
+    story.append(Paragraph("11. FAQ and Troubleshooting", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=SNOWFLAKE_BLUE, spaceAfter=10))
 
     faqs = [
@@ -536,8 +631,12 @@ def build_pdf():
          "A: Your Snowhouse login must be mapped in MDM.MDM_INTERFACES.DIM_EMPLOYEE. "
          "Check that your SNOWHOUSE_LOGIN_NAME matches CURRENT_USER(). About 95% of employees are mapped."),
         ("Q: Data seems stale or cached.",
-         "A: The dashboard uses @st.cache_data with 5-10 minute TTL. Refresh the browser or wait for the "
-         "cache to expire. The underlying Snowhouse data is always live."),
+         "A: SFDC data uses @st.cache_data with 5-10 minute TTL. Product telemetry and Gong data are "
+         "refreshed daily at midnight ET by the HUB_DAILY_REFRESH task. To force a refresh, run: "
+         "CALL TEMP.SBASU.HUB_REFRESH_ALL();"),
+        ("Q: The Opportunities page asks me to click a button. Why doesn't it auto-run?",
+         "A: Cortex AI LLM calls are expensive. The Opportunities page only runs analysis for your "
+         "selected accounts when you explicitly click 'Run Cortex AI Analysis'. This minimizes compute costs."),
         ("Q: How do I run this locally?",
          "A: Clone the repo, ensure you have a 'snowhouse' connection configured in ~/.snowflake/connections.toml, "
          "then run: SNOWHOUSE_CONNECTION_NAME=snowhouse streamlit run streamlit_app.py --server.port 8502"),
