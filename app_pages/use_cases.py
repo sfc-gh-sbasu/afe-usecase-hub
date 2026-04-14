@@ -211,7 +211,7 @@ def generate_expansion_recs(row, product_usage_df, meetings_df):
 
 
 @st.cache_data(ttl=300)
-def load_use_cases(_filter):
+def load_use_cases(filter_str):
     return run_query(f"""
         SELECT
             USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_INDUSTRY,
@@ -229,7 +229,7 @@ def load_use_cases(_filter):
             REGION_NAME, ACCOUNT_ID,
             USE_CASE_EACV, ACCOUNT_BASE_RENEWAL_ACV
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)

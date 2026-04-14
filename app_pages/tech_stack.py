@@ -27,7 +27,7 @@ def safe_float(v, default=0.0):
 
 
 @st.cache_data(ttl=300)
-def load_tech_data(_filter):
+def load_tech_data(filter_str):
     return run_query(f"""
         SELECT
             USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_ID, ACCOUNT_INDUSTRY,
@@ -39,7 +39,7 @@ def load_tech_data(_filter):
             OWNER_NAME, USE_CASE_LEAD_SE_NAME,
             MEDDPICC_IDENTIFY_PAIN
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)

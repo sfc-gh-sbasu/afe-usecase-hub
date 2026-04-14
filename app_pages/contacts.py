@@ -8,7 +8,7 @@ st.title(":material/group: Contacts")
 st.caption("AE, SE, and team members per use case — sourced from SFDC team assignments")
 
 @st.cache_data(ttl=300)
-def load_contacts(_filter):
+def load_contacts(filter_str):
     return run_query(f"""
         SELECT
             USE_CASE_ID, ACCOUNT_NAME,
@@ -16,7 +16,7 @@ def load_contacts(_filter):
             USE_CASE_TEAM_NAME_LIST, USE_CASE_TEAM_ROLE_LIST,
             USE_CASE_NAME, USE_CASE_STAGE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
@@ -30,7 +30,7 @@ if selected_names:
     selected_filter = f"({filter_sql}) AND ACCOUNT_NAME IN ({acct_list})"
 
 @st.cache_data(ttl=300)
-def load_flattened_team(_filter):
+def load_flattened_team(filter_str):
     return run_query(f"""
         SELECT
             d.USE_CASE_ID,
@@ -47,7 +47,7 @@ def load_flattened_team(_filter):
             END AS CONTACT_ROLE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE d,
              LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_NAME_LIST) n
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY d.ACCOUNT_NAME, CONTACT_ROLE
     """)

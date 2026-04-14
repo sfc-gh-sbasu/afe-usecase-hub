@@ -166,14 +166,14 @@ if not st.session_state.get("filter_sql"):
 
 
 @st.cache_data(ttl=300)
-def load_all_accounts(_filter):
+def load_all_accounts(filter_str):
     return run_query(f"""
         SELECT ACCOUNT_NAME, ACCOUNT_ID,
                MAX(COALESCE(USE_CASE_EACV, 0)) as MAX_EACV,
                MAX(COALESCE(ACCOUNT_BASE_RENEWAL_ACV, 0)) as MAX_ACV,
                COUNT(*) as UC_COUNT
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE ({_filter})
+        WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         GROUP BY 1, 2
         ORDER BY MAX_EACV DESC, MAX_ACV DESC, UC_COUNT DESC
