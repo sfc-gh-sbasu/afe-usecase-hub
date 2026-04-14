@@ -226,10 +226,11 @@ def load_use_cases(_filter):
             POC_STAGE, POC_START_DATE, POC_END_DATE,
             RISK_DESCRIPTION, USE_CASE_RISK_LEVEL,
             GO_LIVE_DATE, DECISION_DATE,
-            REGION_NAME, ACCOUNT_ID
+            REGION_NAME, ACCOUNT_ID,
+            USE_CASE_EACV, ACCOUNT_BASE_RENEWAL_ACV
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({_filter})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
 
@@ -362,6 +363,12 @@ for _, row in filtered.iterrows():
         with tab_snapshot:
             snap_cols = st.columns(3)
             with snap_cols[0]:
+                eacv = safe_float(row.get("USE_CASE_EACV"))
+                acv = safe_float(row.get("ACCOUNT_BASE_RENEWAL_ACV"))
+                if eacv:
+                    st.markdown(f":material/attach_money: **EACV:** ${eacv:,.0f}")
+                if acv:
+                    st.caption(f":material/account_balance: ACV: ${acv:,.0f}")
                 days = row["DAYS_IN_STAGE"]
                 if days is not None and pd.notna(days):
                     st.markdown(f":material/timer: **Days in Stage:** {safe_int(days)}")
@@ -401,6 +408,15 @@ for _, row in filtered.iterrows():
                     st.caption(f":material/domain: **Industry:** {row['ACCOUNT_INDUSTRY']} | **Stage:** {row['USE_CASE_STAGE'] or 'N/A'}")
                 if row["OWNER_NAME"] or row["USE_CASE_LEAD_SE_NAME"]:
                     st.caption(f":material/person: **AE:** {row['OWNER_NAME'] or 'N/A'} | **Lead SE:** {row['USE_CASE_LEAD_SE_NAME'] or 'N/A'}")
+                eacv = safe_float(row.get("USE_CASE_EACV"))
+                acv = safe_float(row.get("ACCOUNT_BASE_RENEWAL_ACV"))
+                acv_parts = []
+                if eacv:
+                    acv_parts.append(f"**EACV:** ${eacv:,.0f}")
+                if acv:
+                    acv_parts.append(f"**ACV:** ${acv:,.0f}")
+                if acv_parts:
+                    st.caption(f":material/attach_money: {' | '.join(acv_parts)}")
             with detail_header[1]:
                 cloud = row["CLOUD_PROVIDER"] or "Unknown"
                 st.caption(f":material/cloud: **Deploy:** {cloud}")

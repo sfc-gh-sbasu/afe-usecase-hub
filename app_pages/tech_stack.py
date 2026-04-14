@@ -40,7 +40,7 @@ def load_tech_data(_filter):
             MEDDPICC_IDENTIFY_PAIN
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({_filter})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
 

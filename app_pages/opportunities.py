@@ -59,7 +59,7 @@ def load_use_case_data(filter_str):
             DAYS_IN_STAGE, MEDDPICC_IDENTIFY_PAIN
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({filter_str})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
 
@@ -78,7 +78,7 @@ def detect_opportunities_cortex(filter_str):
                 IS_WON, IN_POC
             FROM MDM.MDM_INTERFACES.DIM_USE_CASE
             WHERE ({filter_str})
-              AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+              AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         )
         SELECT
             USE_CASE_ID, ACCOUNT_NAME, ACCOUNT_ID, ACCOUNT_INDUSTRY,

@@ -68,7 +68,7 @@ def resolve_user_role(full_name):
             COUNT(CASE WHEN ACCOUNT_SE_DIRECTOR = '{safe}' THEN 1 END) as DIR_COUNT,
             COUNT(CASE WHEN ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' THEN 1 END) as VP_COUNT
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-        WHERE USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+        WHERE USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
     """)
     if df.empty:
         return "ic"
@@ -101,7 +101,7 @@ def load_my_regions(full_name):
         SELECT DISTINCT REGION_NAME
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE {name_filter}
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
           AND REGION_NAME IS NOT NULL
         ORDER BY 1
     """)
@@ -174,7 +174,7 @@ def load_all_accounts(_filter):
                COUNT(*) as UC_COUNT
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({_filter})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         GROUP BY 1, 2
         ORDER BY MAX_EACV DESC, MAX_ACV DESC, UC_COUNT DESC
     """)

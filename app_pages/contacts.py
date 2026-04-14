@@ -17,7 +17,7 @@ def load_contacts(_filter):
             USE_CASE_NAME, USE_CASE_STAGE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({_filter})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY ACCOUNT_NAME
     """)
 
@@ -48,7 +48,7 @@ def load_flattened_team(_filter):
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE d,
              LATERAL FLATTEN(INPUT => d.USE_CASE_TEAM_NAME_LIST) n
         WHERE ({_filter})
-          AND USE_CASE_STATUS NOT IN ('Closed - Lost', 'Closed - Archived')
+          AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
         ORDER BY d.ACCOUNT_NAME, CONTACT_ROLE
     """)
 
