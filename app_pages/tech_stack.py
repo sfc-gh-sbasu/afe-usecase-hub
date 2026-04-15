@@ -7,6 +7,12 @@ filter_sql = st.session_state.get("filter_sql", "1=1")
 st.title(":material/layers: Tech Stack Analysis")
 st.caption("Customer technology landscape, product usage telemetry, and competitive positioning")
 
+if st.session_state.get("is_default_view", False):
+    if st.session_state.get("is_region_mode", False):
+        st.info("Viewing **all accounts** in your selected region(s). Pick specific accounts from the sidebar to narrow down.", icon=":material/map:")
+    else:
+        st.info("Viewing **top 10 accounts** by EACV + ACV. Select specific accounts from the sidebar or switch to **Region / Territory** view.", icon=":material/filter_alt:")
+
 
 def safe_int(v, default=0):
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -75,14 +81,6 @@ if selected_ids:
 else:
     sfdc_ids_csv = ""
 usage_df = load_product_usage_for_tech(sfdc_ids_csv)
-
-loaded_accounts = len(selected_names) if selected_names else total_accounts
-if loaded_accounts < total_accounts:
-    st.info(
-        f"Showing **{loaded_accounts}** of **{total_accounts}** accounts (top 10 by EACV + ACV). "
-        f"Select more accounts from the sidebar dropdown.",
-        icon=":material/filter_list:"
-    )
 
 
 def derive_products(row):

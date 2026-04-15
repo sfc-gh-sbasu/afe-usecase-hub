@@ -8,6 +8,12 @@ filter_sql = st.session_state.get("filter_sql", "1=1")
 st.title(":material/work: Customer Use Cases")
 st.caption("Use case lifecycle, activity, and next-step guidance")
 
+if st.session_state.get("is_default_view", False):
+    if st.session_state.get("is_region_mode", False):
+        st.info("Viewing **all accounts** in your selected region(s). Pick specific accounts from the sidebar to narrow down.", icon=":material/map:")
+    else:
+        st.info("Viewing **top 10 accounts** by EACV + ACV. Select specific accounts from the sidebar or switch to **Region / Territory** view.", icon=":material/filter_alt:")
+
 ALL_STAGES = [
     "1 - Discovery",
     "2 - Scoping",
@@ -293,14 +299,6 @@ if selected_ids:
 else:
     usage_df = pd.DataFrame()
     meetings_all_df = pd.DataFrame()
-
-loaded_accounts = len(selected_names) if selected_names else total_accounts
-if loaded_accounts < total_accounts:
-    st.info(
-        f"Showing **{loaded_accounts}** of **{total_accounts}** accounts (top 10 by EACV + ACV). "
-        f"Select more accounts from the sidebar dropdown.",
-        icon=":material/filter_list:"
-    )
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Use Cases", len(df))

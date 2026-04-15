@@ -107,64 +107,6 @@ def load_my_regions(full_name):
     """)
 
 
-with st.sidebar:
-    st.title(":material/hub: DE Field Use Case Intelligence Hub")
-    st.caption("Real-time visibility into AFE/PSS use cases, contacts, tech stack, product usage metrics, and opportunities")
-    st.divider()
-
-    my_name = resolve_current_user()
-    if not my_name:
-        st.error("Could not resolve your identity. Ensure your Snowhouse login is mapped in DIM_EMPLOYEE.", icon=":material/error:")
-        st.stop()
-
-    user_role = resolve_user_role(my_name)
-    role_labels = {"ic": "SE", "manager": "Manager", "director": "Director", "vp": "VP"}
-    st.markdown(f":material/person: Logged in as **{my_name}** ({role_labels.get(user_role, 'SE')})")
-
-    filter_mode = st.radio("Filter by", ["My Use Cases", "My Region / Territory"], key="filter_mode", horizontal=True)
-
-    my_name_filter = build_name_filter(my_name)
-
-    if filter_mode == "My Use Cases":
-        st.session_state.filter_sql = my_name_filter
-        st.success(f"Showing your use cases", icon=":material/person:")
-    else:
-        try:
-            regions_df = load_my_regions(my_name)
-            my_regions = regions_df["REGION_NAME"].dropna().tolist()
-        except Exception:
-            my_regions = []
-
-        if not my_regions:
-            st.warning("No regions found for your use cases.", icon=":material/warning:")
-            st.session_state.filter_sql = my_name_filter
-        else:
-            selected_regions = st.multiselect(
-                ":material/map: Your Region(s)",
-                options=my_regions,
-                default=my_regions,
-                key="selected_regions",
-                placeholder="Select regions..."
-            )
-            if selected_regions:
-                region_list = ",".join([f"'{r}'" for r in selected_regions])
-                st.session_state.filter_sql = f"REGION_NAME IN ({region_list})"
-                st.success(f"Showing: **{', '.join(selected_regions)}**", icon=":material/map:")
-            else:
-                st.session_state.filter_sql = None
-
-    st.divider()
-    try:
-        info_df = run_query("SELECT CURRENT_ROLE(), CURRENT_WAREHOUSE()")
-        st.caption(f":material/account_circle: {info_df.iloc[0, 0]} | {info_df.iloc[0, 1]}")
-    except Exception:
-        pass
-
-if not st.session_state.get("filter_sql"):
-    st.info("Select a filter from the sidebar to get started.", icon=":material/filter_alt:")
-    st.stop()
-
-
 @st.cache_data(ttl=300)
 def load_all_accounts(filter_str):
     return run_query(f"""
@@ -179,45 +121,186 @@ def load_all_accounts(filter_str):
         ORDER BY MAX_EACV DESC, MAX_ACV DESC, UC_COUNT DESC
     """)
 
+
+with st.sidebar:
+    st.title(":material/hub: DE Field Use Case Intelligence Hub")
+    st.caption("Real-time visibility into AFE/PSS use cases, contacts, tech stack, product usage metrics, and opportunities")
+    st.divider()
+
+    my_name = resolve_current_user()
+    if not my_name:
+        st.error("Could not resolve your identity. Ensure your Snowhouse login is mapped in DIM_EMPLOYEE.", icon=":material/error:")
+        st.stop()
+
+    user_role = resolve_user_role(my_name)
+    my_name_filter = build_name_filter(my_name)
+
+    filter_mode = st.radio("Filter by", ["My Use Cases", "My Region / Territory"], key="filter_mode", horizontal=True)
+
+    if filter_mode == "My Use Cases":
+        st.session_state.filter_sql = my_name_filter
+        st.session_state.is_region_mode = False
+        for k in ["region_picker", "region_account_picker"]:
+            st.session_state.pop(k, None)
+    else:
+        st.session_state.is_region_mode = True
+        try:
+            regions_df = load_my_regions(my_name)
+            my_regions = regions_df["REGION_NAME"].dropna().tolist()
+        except Exception:
+            my_regions = []
+
+        if not my_regions:
+            st.warning("No regions found for your use cases.", icon=":material/warning:")
+            st.session_state.filter_sql = my_name_filter
+        else:
+            if "region_picker" not in st.session_state:
+                st.session_state.region_picker = my_regions
+            selected_regions = st.multiselect(
+                ":material/map: Your Region(s)",
+                options=my_regions,
+                key="region_picker",
+                placeholder="Select regions..."
+            )
+            if selected_regions:
+                region_list = ",".join([f"'{r}'" for r in selected_regions])
+                st.session_state.filter_sql = f"REGION_NAME IN ({region_list})"
+            else:
+                st.session_state.filter_sql = None
+
+if not st.session_state.get("filter_sql"):
+    with st.sidebar:
+        st.divider()
+        st.markdown(f":material/person: {my_name}")
+    st.info("Select a filter from the sidebar to get started.", icon=":material/filter_alt:")
+    st.stop()
+
 account_list_df = load_all_accounts(st.session_state.filter_sql)
+
+ALL_ACCOUNTS_LABEL = "📋 All Accounts"
+TOP_10_LABEL = "⭐ Top 10 (by EACV + ACV)"
+
+total_accounts = len(account_list_df)
+all_account_names = account_list_df["ACCOUNT_NAME"].tolist() if not account_list_df.empty else []
+top_10 = all_account_names[:10]
+
+is_region_mode = st.session_state.get("is_region_mode", False)
+
+
+def _on_region_account_change():
+    vals = st.session_state.get("region_account_picker", [])
+    prev = st.session_state.get("_prev_region_accounts", [ALL_ACCOUNTS_LABEL])
+    had_all = ALL_ACCOUNTS_LABEL in prev
+    has_all = ALL_ACCOUNTS_LABEL in vals
+    specific = [v for v in vals if v != ALL_ACCOUNTS_LABEL]
+    if has_all and specific and not had_all:
+        st.session_state.region_account_picker = specific
+    elif has_all and specific and had_all:
+        st.session_state.region_account_picker = [ALL_ACCOUNTS_LABEL]
+    st.session_state._prev_region_accounts = list(st.session_state.region_account_picker)
+
+
+def _on_my_account_change():
+    vals = st.session_state.get("selected_accounts", [])
+    prev = st.session_state.get("_prev_my_accounts", [TOP_10_LABEL])
+    had_top = TOP_10_LABEL in prev
+    has_top = TOP_10_LABEL in vals
+    specific = [v for v in vals if v != TOP_10_LABEL]
+    if has_top and specific and not had_top:
+        st.session_state.selected_accounts = specific
+    elif has_top and specific and had_top:
+        st.session_state.selected_accounts = [TOP_10_LABEL]
+    st.session_state._prev_my_accounts = list(st.session_state.selected_accounts)
+
 
 with st.sidebar:
     st.divider()
-    total_accounts = len(account_list_df)
-    all_account_names = account_list_df["ACCOUNT_NAME"].tolist() if not account_list_df.empty else []
-    top_10 = all_account_names[:10]
 
-    TOP_10_LABEL = "⭐ Top 10 (by EACV + ACV)"
+    if is_region_mode:
+        st.markdown(f":material/business: **{total_accounts} accounts** in selected region(s)")
+        st.caption("Select specific accounts or keep all.")
 
-    st.markdown(f":material/business: **Accounts** ({total_accounts} total)")
-    st.caption("Showing top 10 by EACV + ACV. Select more or fewer accounts below.")
+        if "region_account_picker" not in st.session_state:
+            st.session_state.region_account_picker = [ALL_ACCOUNTS_LABEL]
+            st.session_state._prev_region_accounts = [ALL_ACCOUNTS_LABEL]
 
-    selected_accounts = st.multiselect(
-        ":material/filter_list: Select accounts to load details",
-        options=[TOP_10_LABEL] + all_account_names,
-        default=[TOP_10_LABEL],
-        key="selected_accounts",
-        placeholder="Choose accounts..."
-    )
+        selected_accounts = st.multiselect(
+            ":material/filter_list: Accounts",
+            options=[ALL_ACCOUNTS_LABEL] + all_account_names,
+            key="region_account_picker",
+            on_change=_on_region_account_change,
+            placeholder="Pick accounts..."
+        )
 
-    if not selected_accounts:
-        st.warning("Select at least one account", icon=":material/warning:")
-        st.stop()
+        if not selected_accounts:
+            st.warning("Select at least one account", icon=":material/warning:")
+            st.stop()
 
-    if TOP_10_LABEL in selected_accounts:
-        resolved_accounts = list(dict.fromkeys(top_10 + [a for a in selected_accounts if a != TOP_10_LABEL]))
+        if ALL_ACCOUNTS_LABEL in selected_accounts:
+            resolved_accounts = all_account_names
+        else:
+            resolved_accounts = [a for a in selected_accounts if a != ALL_ACCOUNTS_LABEL]
+
+        if not resolved_accounts:
+            st.warning("Select at least one account", icon=":material/warning:")
+            st.stop()
+
+        selected_ids = account_list_df[account_list_df["ACCOUNT_NAME"].isin(resolved_accounts)]["ACCOUNT_ID"].dropna().tolist()
+        st.session_state.selected_sfdc_ids = selected_ids
+        st.session_state.selected_account_names = resolved_accounts
+
+        is_default = ALL_ACCOUNTS_LABEL in selected_accounts
+        st.session_state.is_default_view = is_default
+
+        showing = len(resolved_accounts)
+        if showing == total_accounts:
+            st.success(f"Showing all **{total_accounts}** accounts", icon=":material/map:")
+        else:
+            st.success(f"Showing **{showing}** of **{total_accounts}** accounts", icon=":material/map:")
     else:
-        resolved_accounts = [a for a in selected_accounts if a != TOP_10_LABEL]
+        st.markdown(f":material/business: **Accounts** ({total_accounts} total)")
+        st.caption("Showing top 10 by EACV + ACV. Select more or fewer accounts below.")
 
-    if not resolved_accounts:
-        st.warning("Select at least one account", icon=":material/warning:")
-        st.stop()
+        if "selected_accounts" not in st.session_state:
+            st.session_state.selected_accounts = [TOP_10_LABEL]
+            st.session_state._prev_my_accounts = [TOP_10_LABEL]
 
-    selected_ids = account_list_df[account_list_df["ACCOUNT_NAME"].isin(resolved_accounts)]["ACCOUNT_ID"].dropna().tolist()
-    st.session_state.selected_sfdc_ids = selected_ids
-    st.session_state.selected_account_names = resolved_accounts
+        selected_accounts = st.multiselect(
+            ":material/filter_list: Select accounts to load details",
+            options=[TOP_10_LABEL] + all_account_names,
+            key="selected_accounts",
+            on_change=_on_my_account_change,
+            placeholder="Choose accounts..."
+        )
 
-    if TOP_10_LABEL in selected_accounts and len(selected_accounts) == 1:
-        st.info(f"Showing top 10 accounts by EACV + ACV out of {total_accounts} total. To see other accounts, select from the dropdown above.", icon=":material/info:")
+        if not selected_accounts:
+            st.warning("Select at least one account", icon=":material/warning:")
+            st.stop()
+
+        if TOP_10_LABEL in selected_accounts:
+            resolved_accounts = list(dict.fromkeys(top_10 + [a for a in selected_accounts if a != TOP_10_LABEL]))
+        else:
+            resolved_accounts = [a for a in selected_accounts if a != TOP_10_LABEL]
+
+        if not resolved_accounts:
+            st.warning("Select at least one account", icon=":material/warning:")
+            st.stop()
+
+        selected_ids = account_list_df[account_list_df["ACCOUNT_NAME"].isin(resolved_accounts)]["ACCOUNT_ID"].dropna().tolist()
+        st.session_state.selected_sfdc_ids = selected_ids
+        st.session_state.selected_account_names = resolved_accounts
+
+        is_default = TOP_10_LABEL in selected_accounts and len([a for a in selected_accounts if a != TOP_10_LABEL]) == 0
+        st.session_state.is_default_view = is_default
+
+        st.success(f"Showing **{len(resolved_accounts)}** of **{total_accounts}** accounts", icon=":material/person:")
+
+    st.divider()
+    st.markdown(f":material/person: {my_name}")
+    try:
+        info_df = run_query("SELECT CURRENT_ROLE(), CURRENT_WAREHOUSE()")
+        st.caption(f"{info_df.iloc[0, 0]} | {info_df.iloc[0, 1]}")
+    except Exception:
+        pass
 
 page.run()

@@ -7,6 +7,12 @@ filter_sql = st.session_state.get("filter_sql", "1=1")
 st.title(":material/group: Contacts")
 st.caption("AE, SE, and team members per use case — sourced from SFDC team assignments")
 
+if st.session_state.get("is_default_view", False):
+    if st.session_state.get("is_region_mode", False):
+        st.info("Viewing **all accounts** in your selected region(s). Pick specific accounts from the sidebar to narrow down.", icon=":material/map:")
+    else:
+        st.info("Viewing **top 10 accounts** by EACV + ACV. Select specific accounts from the sidebar or switch to **Region / Territory** view.", icon=":material/filter_alt:")
+
 @st.cache_data(ttl=300)
 def load_contacts(filter_str):
     return run_query(f"""
@@ -24,6 +30,9 @@ def load_contacts(filter_str):
 df = load_contacts(filter_sql)
 
 selected_names = st.session_state.get("selected_account_names", [])
+if selected_names:
+    df = df[df["ACCOUNT_NAME"].isin(selected_names)]
+
 selected_filter = filter_sql
 if selected_names:
     acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
@@ -57,15 +66,6 @@ try:
 except Exception:
     team_df = pd.DataFrame()
 
-total_accounts = df["ACCOUNT_NAME"].nunique()
-loaded_accounts = len(selected_names)
-if loaded_accounts < total_accounts:
-    st.info(
-        f":material/speed: Contacts loaded for **{loaded_accounts}** of **{total_accounts}** accounts. "
-        f"Select more from the sidebar.",
-        icon=":material/info:"
-    )
-
 total_contacts = len(team_df) if not team_df.empty else 0
 unique_people = team_df["CONTACT_NAME"].nunique() if not team_df.empty else 0
 accounts = df["ACCOUNT_NAME"].nunique()
@@ -81,7 +81,7 @@ fc1, fc2 = st.columns([3, 2])
 search = fc1.text_input(":material/search: Search", placeholder="Name, role, customer...", key="ct_search")
 sort_col = fc2.selectbox("Sort by", ["Customer", "Lead SE", "AE"], key="ct_sort")
 
-customers = sorted([c for c in df["ACCOUNT_NAME"].dropna().unique() if c in selected_names])
+customers = sorted(df["ACCOUNT_NAME"].dropna().unique())
 
 for customer in customers:
     if search and search.lower() not in customer.lower():

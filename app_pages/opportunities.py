@@ -8,6 +8,12 @@ filter_sql = st.session_state.get("filter_sql", "1=1")
 st.title(":material/lightbulb: Product Opportunities")
 st.caption("Cortex AI-powered product expansion opportunities — analyzes SFDC use case metadata with Snowflake Cortex LLM")
 
+if st.session_state.get("is_default_view", False):
+    if st.session_state.get("is_region_mode", False):
+        st.info("Viewing **all accounts** in your selected region(s). Pick specific accounts from the sidebar to narrow down.", icon=":material/map:")
+    else:
+        st.info("Viewing **top 10 accounts** by EACV + ACV. Select specific accounts from the sidebar or switch to **Region / Territory** view.", icon=":material/filter_alt:")
+
 FIVE_SERVICES = ["Openflow", "SSV2 (Snowpipe Streaming)", "Iceberg / Open Data Lake", "Dynamic Tables", "Snowpark"]
 
 CORTEX_MODEL = "llama3.1-70b"
