@@ -47,26 +47,31 @@ st.session_state.run_query = run_query
 @st.cache_data(ttl=600)
 def resolve_current_user():
     df = run_query("""
-        SELECT e.PREFERRED_FULL_NAME
+        SELECT e.PREFERRED_FULL_NAME, e.WORK_EMAIL
         FROM MDM.MDM_INTERFACES.DIM_EMPLOYEE e
         WHERE UPPER(e.SNOWHOUSE_LOGIN_NAME) = CURRENT_USER()
           AND e.IS_ACTIVE = TRUE
         LIMIT 1
     """)
     if df.empty:
-        return None
-    return df.iloc[0, 0]
+        return None, None
+    return df.iloc[0, 0], df.iloc[0, 1]
 
 
 @st.cache_data(ttl=600)
-def resolve_user_role(full_name):
+def resolve_user_role(full_name, work_email=None):
     safe = full_name.replace("'", "''")
+    email_clause = ""
+    if work_email:
+        safe_email = work_email.replace("'", "''").lower()
+        email_clause = f", COUNT(CASE WHEN LOWER(FULL_ACCESS_KEY_EMAILS_W_SALES) LIKE '%{safe_email}%' THEN 1 END) as SALES_ACCESS_COUNT"
     df = run_query(f"""
         SELECT
             COUNT(CASE WHEN ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST) THEN 1 END) as IC_COUNT,
             COUNT(CASE WHEN ACCOUNT_SE_MANAGER = '{safe}' THEN 1 END) as MGR_COUNT,
             COUNT(CASE WHEN ACCOUNT_SE_DIRECTOR = '{safe}' THEN 1 END) as DIR_COUNT,
             COUNT(CASE WHEN ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' THEN 1 END) as VP_COUNT
+            {email_clause}
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
     """)
@@ -75,6 +80,8 @@ def resolve_user_role(full_name):
     row = df.iloc[0]
     if row["VP_COUNT"] > 0:
         return "vp"
+    if work_email and row.get("SALES_ACCESS_COUNT", 0) > 1000:
+        return "sales_vp"
     if row["DIR_COUNT"] > 0:
         return "director"
     if row["MGR_COUNT"] > 0:
@@ -82,16 +89,22 @@ def resolve_user_role(full_name):
     return "ic"
 
 
-def build_name_filter(full_name):
+def build_name_filter(full_name, work_email=None):
     safe = full_name.replace("'", "''")
-    role = resolve_user_role(full_name)
+    role = resolve_user_role(full_name, work_email)
+    email_cond = ""
+    if work_email:
+        safe_email = work_email.replace("'", "''").lower()
+        email_cond = f" OR LOWER(FULL_ACCESS_KEY_EMAILS_W_SALES) LIKE '%{safe_email}%'"
     if role == "vp":
-        return f"(ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' OR ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
+        return f"(ACCOUNT_SE_VP = '{safe}' OR ACCOUNT_GVP = '{safe}' OR ACCOUNT_RVP = '{safe}' OR ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST){email_cond})"
+    if role == "sales_vp":
+        return f"(LOWER(FULL_ACCESS_KEY_EMAILS_W_SALES) LIKE '%{work_email.lower()}%' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
     if role == "director":
-        return f"(ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
+        return f"(ACCOUNT_SE_DIRECTOR = '{safe}' OR ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST){email_cond})"
     if role == "manager":
-        return f"(ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST))"
-    return f"ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST)"
+        return f"(ACCOUNT_SE_MANAGER = '{safe}' OR ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST){email_cond})"
+    return f"(ARRAY_CONTAINS('{safe}'::VARIANT, USE_CASE_TEAM_NAME_LIST){email_cond})"
 
 
 @st.cache_data(ttl=600)
@@ -130,8 +143,8 @@ def load_sfdc_territories():
 
 
 @st.cache_data(ttl=600)
-def load_my_regions(full_name):
-    name_filter = build_name_filter(full_name)
+def load_my_regions(full_name, work_email=None):
+    name_filter = build_name_filter(full_name, work_email)
     team_df = run_query(f"""
         SELECT DISTINCT REGION_NAME
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
@@ -168,13 +181,13 @@ with st.sidebar:
     st.caption("Real-time visibility into AFE/PSS use cases, contacts, tech stack, product usage metrics, and opportunities")
     st.divider()
 
-    my_name = resolve_current_user()
+    my_name, my_email = resolve_current_user()
     if not my_name:
         st.error("Could not resolve your identity. Ensure your Snowhouse login is mapped in DIM_EMPLOYEE.", icon=":material/error:")
         st.stop()
 
-    user_role = resolve_user_role(my_name)
-    my_name_filter = build_name_filter(my_name)
+    user_role = resolve_user_role(my_name, my_email)
+    my_name_filter = build_name_filter(my_name, my_email)
 
     filter_mode = st.radio("Filter by", ["My Use Cases", "My Region / Territory"], key="filter_mode", horizontal=True)
 
@@ -186,7 +199,7 @@ with st.sidebar:
     else:
         st.session_state.is_region_mode = True
         try:
-            regions_df = load_my_regions(my_name)
+            regions_df = load_my_regions(my_name, my_email)
             my_regions = regions_df["REGION_NAME"].dropna().tolist()
         except Exception:
             my_regions = []
