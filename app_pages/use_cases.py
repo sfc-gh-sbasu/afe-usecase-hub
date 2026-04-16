@@ -4,6 +4,7 @@ import re
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
+stable_filter = st.session_state.get("_all_regions_filter", filter_sql)
 
 st.title(":material/work: Customer Use Cases")
 st.caption("Use case lifecycle, activity, and next-step guidance")
@@ -284,7 +285,7 @@ def load_gong_meetings(sfdc_account_ids_csv):
     """)
 
 
-all_df = load_use_cases(filter_sql)
+all_df = load_use_cases(stable_filter)
 total_accounts = all_df["ACCOUNT_NAME"].nunique()
 
 selected_ids = st.session_state.get("selected_sfdc_ids", [])

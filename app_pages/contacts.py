@@ -3,6 +3,7 @@ import pandas as pd
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
+stable_filter = st.session_state.get("_all_regions_filter", filter_sql)
 
 st.title(":material/group: Contacts")
 st.caption("AE, SE, and team members per use case — sourced from SFDC team assignments")
@@ -27,16 +28,16 @@ def load_contacts(filter_str):
         ORDER BY ACCOUNT_NAME
     """)
 
-df = load_contacts(filter_sql)
+df = load_contacts(stable_filter)
 
 selected_names = st.session_state.get("selected_account_names", [])
 if selected_names:
     df = df[df["ACCOUNT_NAME"].isin(selected_names)]
 
-selected_filter = filter_sql
+selected_filter = stable_filter
 if selected_names:
     acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
-    selected_filter = f"({filter_sql}) AND ACCOUNT_NAME IN ({acct_list})"
+    selected_filter = f"({stable_filter}) AND ACCOUNT_NAME IN ({acct_list})"
 
 @st.cache_data(ttl=300)
 def load_flattened_team(filter_str):

@@ -4,6 +4,7 @@ import json
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
+stable_filter = st.session_state.get("_all_regions_filter", filter_sql)
 
 st.title(":material/lightbulb: Product Opportunities")
 st.caption("Cortex AI-powered product expansion opportunities — analyzes SFDC use case metadata with Snowflake Cortex LLM")
@@ -187,9 +188,9 @@ if not selected_names:
     st.info("Select accounts from the sidebar to analyze opportunities.", icon=":material/filter_list:")
     st.stop()
 
-selected_filter = filter_sql
+selected_filter = stable_filter
 acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
-selected_filter = f"({filter_sql}) AND ACCOUNT_NAME IN ({acct_list})"
+selected_filter = f"({stable_filter}) AND ACCOUNT_NAME IN ({acct_list})"
 
 df = load_use_case_data(selected_filter)
 

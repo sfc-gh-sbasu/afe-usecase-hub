@@ -3,6 +3,7 @@ import pandas as pd
 
 run_query = st.session_state.run_query
 filter_sql = st.session_state.get("filter_sql", "1=1")
+stable_filter = st.session_state.get("_all_regions_filter", filter_sql)
 
 st.title(":material/layers: Tech Stack Analysis")
 st.caption("Customer technology landscape, product usage telemetry, and competitive positioning")
@@ -68,7 +69,7 @@ def load_product_usage_for_tech(sfdc_account_ids_csv):
     """)
 
 
-all_df = load_tech_data(filter_sql)
+all_df = load_tech_data(stable_filter)
 total_accounts = all_df["ACCOUNT_NAME"].nunique()
 
 selected_ids = st.session_state.get("selected_sfdc_ids", [])

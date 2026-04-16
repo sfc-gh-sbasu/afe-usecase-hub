@@ -95,9 +95,44 @@ def build_name_filter(full_name):
 
 
 @st.cache_data(ttl=600)
+def load_sfdc_territories():
+    return run_query("""
+        WITH user_territories AS (
+            SELECT t.ID, t.REGION_C
+            FROM FIVETRAN.SALESFORCE.USER_TERRITORY_2_ASSOCIATION uta
+            JOIN FIVETRAN.SALESFORCE.TERRITORY_2 t ON uta.TERRITORY_2_ID = t.ID
+            JOIN FIVETRAN.SALESFORCE."USER" u ON uta.USER_ID = u.ID
+            JOIN MDM.MDM_INTERFACES.DIM_EMPLOYEE e ON u.EMAIL = e.WORK_EMAIL
+            WHERE UPPER(e.SNOWHOUSE_LOGIN_NAME) = CURRENT_USER()
+              AND uta._FIVETRAN_DELETED = FALSE
+              AND t._FIVETRAN_DELETED = FALSE
+        ),
+        all_descendants(ID, REGION_C, LVL) AS (
+            SELECT ID, REGION_C, 0 FROM user_territories
+            UNION ALL
+            SELECT t.ID, t.REGION_C, ad.LVL + 1
+            FROM FIVETRAN.SALESFORCE.TERRITORY_2 t
+            JOIN all_descendants ad ON t.PARENT_TERRITORY_2_ID = ad.ID
+            WHERE t._FIVETRAN_DELETED = FALSE AND ad.LVL < 5
+        ),
+        valid_regions AS (
+            SELECT DISTINCT REGION_NAME
+            FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+            WHERE REGION_NAME IS NOT NULL
+              AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
+        )
+        SELECT DISTINCT ad.REGION_C as REGION_NAME
+        FROM all_descendants ad
+        JOIN valid_regions vr ON ad.REGION_C = vr.REGION_NAME
+        WHERE ad.REGION_C IS NOT NULL
+        ORDER BY 1
+    """)
+
+
+@st.cache_data(ttl=600)
 def load_my_regions(full_name):
     name_filter = build_name_filter(full_name)
-    return run_query(f"""
+    team_df = run_query(f"""
         SELECT DISTINCT REGION_NAME
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE {name_filter}
@@ -105,19 +140,25 @@ def load_my_regions(full_name):
           AND REGION_NAME IS NOT NULL
         ORDER BY 1
     """)
+    try:
+        sfdc_df = load_sfdc_territories()
+    except Exception:
+        sfdc_df = pd.DataFrame(columns=["REGION_NAME"])
+    merged = pd.concat([team_df, sfdc_df]).drop_duplicates(subset=["REGION_NAME"]).sort_values("REGION_NAME").reset_index(drop=True)
+    return merged
 
 
 @st.cache_data(ttl=300)
 def load_all_accounts(filter_str):
     return run_query(f"""
-        SELECT ACCOUNT_NAME, ACCOUNT_ID,
+        SELECT ACCOUNT_NAME, ACCOUNT_ID, REGION_NAME,
                MAX(COALESCE(USE_CASE_EACV, 0)) as MAX_EACV,
                MAX(COALESCE(ACCOUNT_BASE_RENEWAL_ACV, 0)) as MAX_ACV,
                COUNT(*) as UC_COUNT
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE
         WHERE ({filter_str})
           AND USE_CASE_STATUS NOT IN ('Not In Pursuit', 'Closed - Lost', 'Closed - Archived')
-        GROUP BY 1, 2
+        GROUP BY 1, 2, 3
         ORDER BY MAX_EACV DESC, MAX_ACV DESC, UC_COUNT DESC
     """)
 
@@ -155,7 +196,7 @@ with st.sidebar:
             st.session_state.filter_sql = my_name_filter
         else:
             if "region_picker" not in st.session_state:
-                st.session_state.region_picker = my_regions
+                st.session_state.region_picker = my_regions[:3] if len(my_regions) > 10 else my_regions
             selected_regions = st.multiselect(
                 ":material/map: Your Region(s)",
                 options=my_regions,
@@ -165,6 +206,8 @@ with st.sidebar:
             if selected_regions:
                 region_list = ",".join([f"'{r}'" for r in selected_regions])
                 st.session_state.filter_sql = f"REGION_NAME IN ({region_list})"
+                all_region_list = ",".join([f"'{r}'" for r in my_regions])
+                st.session_state._all_regions_filter = f"REGION_NAME IN ({all_region_list})"
             else:
                 st.session_state.filter_sql = None
 
@@ -175,7 +218,17 @@ if not st.session_state.get("filter_sql"):
     st.info("Select a filter from the sidebar to get started.", icon=":material/filter_alt:")
     st.stop()
 
-account_list_df = load_all_accounts(st.session_state.filter_sql)
+is_region_mode = st.session_state.get("is_region_mode", False)
+
+if is_region_mode and st.session_state.get("_all_regions_filter"):
+    all_region_accounts_df = load_all_accounts(st.session_state._all_regions_filter)
+    selected_regions_set = set(st.session_state.get("region_picker", []))
+    account_list_df = all_region_accounts_df[all_region_accounts_df["REGION_NAME"].isin(selected_regions_set)].copy()
+    account_list_df = account_list_df.groupby(["ACCOUNT_NAME", "ACCOUNT_ID"], as_index=False).agg(
+        MAX_EACV=("MAX_EACV", "max"), MAX_ACV=("MAX_ACV", "max"), UC_COUNT=("UC_COUNT", "sum")
+    ).sort_values(["MAX_EACV", "MAX_ACV", "UC_COUNT"], ascending=False).reset_index(drop=True)
+else:
+    account_list_df = load_all_accounts(st.session_state.filter_sql)
 
 ALL_ACCOUNTS_LABEL = "📋 All Accounts"
 TOP_10_LABEL = "⭐ Top 10 (by EACV + ACV)"
