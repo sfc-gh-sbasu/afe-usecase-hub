@@ -18,7 +18,7 @@ if st.session_state.get("is_default_view", False):
 def load_contacts(filter_str):
     return run_query(f"""
         SELECT
-            USE_CASE_ID, ACCOUNT_NAME,
+            USE_CASE_ID, ACCOUNT_NAME, REGION_NAME,
             USE_CASE_LEAD_SE_NAME, OWNER_NAME,
             USE_CASE_TEAM_NAME_LIST, USE_CASE_TEAM_ROLE_LIST,
             USE_CASE_NAME, USE_CASE_STAGE
@@ -30,14 +30,25 @@ def load_contacts(filter_str):
 
 df = load_contacts(stable_filter)
 
+is_region_mode = st.session_state.get("is_region_mode", False)
+if is_region_mode:
+    selected_regions = st.session_state.get("region_picker", [])
+    if selected_regions:
+        df = df[df["REGION_NAME"].isin(selected_regions)]
+
 selected_names = st.session_state.get("selected_account_names", [])
 if selected_names:
     df = df[df["ACCOUNT_NAME"].isin(selected_names)]
 
 selected_filter = stable_filter
+if is_region_mode:
+    selected_regions = st.session_state.get("region_picker", [])
+    if selected_regions:
+        region_list = ",".join([f"'{r}'" for r in selected_regions])
+        selected_filter = f"({stable_filter}) AND REGION_NAME IN ({region_list})"
 if selected_names:
     acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
-    selected_filter = f"({stable_filter}) AND ACCOUNT_NAME IN ({acct_list})"
+    selected_filter = f"({selected_filter}) AND ACCOUNT_NAME IN ({acct_list})"
 
 @st.cache_data(ttl=300)
 def load_flattened_team(filter_str):

@@ -70,6 +70,13 @@ def load_product_usage_for_tech(sfdc_account_ids_csv):
 
 
 all_df = load_tech_data(stable_filter)
+
+is_region_mode = st.session_state.get("is_region_mode", False)
+if is_region_mode:
+    selected_regions = st.session_state.get("region_picker", [])
+    if selected_regions:
+        all_df = all_df[all_df["REGION_NAME"].isin(selected_regions)]
+
 total_accounts = all_df["ACCOUNT_NAME"].nunique()
 
 selected_ids = st.session_state.get("selected_sfdc_ids", [])

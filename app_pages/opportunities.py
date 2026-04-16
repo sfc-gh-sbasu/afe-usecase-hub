@@ -189,8 +189,14 @@ if not selected_names:
     st.stop()
 
 selected_filter = stable_filter
+is_region_mode = st.session_state.get("is_region_mode", False)
+if is_region_mode:
+    selected_regions = st.session_state.get("region_picker", [])
+    if selected_regions:
+        region_list = ",".join([f"'{r}'" for r in selected_regions])
+        selected_filter = f"({selected_filter}) AND REGION_NAME IN ({region_list})"
 acct_list = ",".join([f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in selected_names])
-selected_filter = f"({stable_filter}) AND ACCOUNT_NAME IN ({acct_list})"
+selected_filter = f"({selected_filter}) AND ACCOUNT_NAME IN ({acct_list})"
 
 df = load_use_case_data(selected_filter)
 
